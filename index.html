@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pexip Resource &amp; Capacity Calculator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<!-- ─── Header ─────────────────────────────────────────────────────────────── -->
+<header class="site-header">
+  <div class="logo">
+    <div class="logo-mark">Px</div>
+    <h1>Pexip Resource &amp; Capacity Calculator</h1>
+  </div>
+  <span class="sub">Model your deployment before you build it</span>
+</header>
+
+<!-- ─── App root ───────────────────────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- ── Sticky summary bar ─────────────────────────────────────────────── -->
+  <div class="summary-bar">
+    <div class="summary-chip">
+      <span class="chip-label">HD Connections (raw)</span>
+      <span class="chip-value">{{ fmtHD(totalHDRaw) }}</span>
+      <span class="chip-unit">HD-equivalent</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-label">HD + 25% headroom</span>
+      <span class="chip-value">{{ fmtHD(totalHDWithHeadroom) }}</span>
+      <span class="chip-unit">HD-equivalent</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-label">vCPU Required</span>
+      <span class="chip-value">{{ vCPURequired }}</span>
+      <span class="chip-unit">virtual CPUs</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-label">Transcoding Nodes</span>
+      <span class="chip-value">{{ transcodingNodeCount }}</span>
+      <span class="chip-unit">× {{ nodeVcpuSize }} vCPU each</span>
+    </div>
+    <div class="summary-chip">
+      <span class="chip-label">Total Bandwidth</span>
+      <span class="chip-value">{{ (totalBandwidthKbps / 1000).toFixed(1) }}</span>
+      <span class="chip-unit">Gbps ingress + egress</span>
+    </div>
+  </div>
+
+  <div class="main-layout">
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         LEFT COLUMN — INPUTS
+         ══════════════════════════════════════════════════════════════════════ -->
+    <div class="inputs-column">
+
+      <!-- ── A. Call Mix ──────────────────────────────────────────────────── -->
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-icon">①</div>
+          <h2>Call Mix &amp; Quality Tiers</h2>
+          <span class="section-hint">1080p=2× · 720p=1× · SD=0.5× · Audio=1/16×</span>
+        </div>
+        <div class="section-body">
+          <table class="mix-table">
+            <thead>
+              <tr>
+                <th>Quality</th>
+                <th>Participants</th>
+                <th>Codec</th>
+                <th>HD equiv.</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in callMix" :key="row.id">
+                <td>
+                  <select v-model="row.quality" style="width:130px">
+                    <option v-for="(label, key) in QUALITY_LABELS" :key="key" :value="key">
+                      {{ label }}
+                    </option>
+                  </select>
+                </td>
+                <td>
+                  <input type="number" v-model.number="row.count" min="0" step="1"
+                         style="width:90px" placeholder="0" />
+                </td>
+                <td>
+                  <select v-model="row.codec" style="width:110px">
+                    <option value="h264">H.264 / VP8</option>
+                    <option value="vp9">VP9</option>
+                  </select>
+                </td>
+                <td>
+                  <span class="hd-badge">
+                    {{ fmtHD(rowResults.find(r => r.id === row.id)?.hdRow ?? 0) }} HD
+                  </span>
+                </td>
+                <td>
+                  <button class="btn-remove" @click="removeRow(row.id)" title="Remove row">✕</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <button class="btn-add" @click="addRow">＋ Add tier row</button>
+          <div class="inline-note" style="margin-top:10px">
+            VP9 codec: −33% bandwidth vs H.264, but +25% node resource cost.
+            WebRTC clients often negotiate VP9 automatically.
+          </div>
+        </div>
+      </div>
+
+      <!-- ── B. Endpoint Types ────────────────────────────────────────────── -->
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-icon">②</div>
+          <h2>Endpoint Types</h2>
+          <span class="section-hint">Select all that apply to this deployment</span>
+        </div>
+        <div class="section-body">
+          <div class="chip-group">
+            <span
+              v-for="(def, key) in ENDPOINT_TYPES"
+              :key="key"
+              class="chip"
+              :class="{ active: endpointTypes[key] }"
+              @click="endpointTypes[key] = !endpointTypes[key]"
+            >{{ def.label }}</span>
+          </div>
+          <div style="font-size:12px; color:var(--pex-text-muted); line-height:1.8; margin-top:8px">
+            <div v-if="endpointTypes.sip_h323">
+              <strong class="text-teal">SIP / H.323:</strong>
+              1 connection. No extra HD leg for presentation (dual-stream is native).
+            </div>
+            <div v-if="endpointTypes.webrtc">
+              <strong class="text-teal">WebRTC:</strong>
+              1 base connection + optional +1 HD presentation leg. VP9 overhead applied via codec selector.
+            </div>
+            <div v-if="endpointTypes.zoom_sip">
+              <strong class="text-teal">Zoom via SIP:</strong>
+              Treated identically to SIP — 1 connection, no extra presentation leg.
+            </div>
+            <div v-if="endpointTypes.teams">
+              <strong class="text-teal">Microsoft Teams:</strong>
+              1.5 HD per call. Presentation adds +0.5 HD. Counted as 2 legs (ingress + egress).
+            </div>
+            <div v-if="endpointTypes.google_meet">
+              <strong class="text-teal">Google Meet:</strong>
+              1.0 HD per call (VP8). Presenting from VTC adds +1.0 HD. 2 legs per call.
+            </div>
+            <div v-if="endpointTypes.interop">
+              <strong class="text-teal">Interop / Gateway:</strong>
+              2 connections per call (ingress + egress) = full 2× resource cost.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── C. Presentation ──────────────────────────────────────────────── -->
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-icon">③</div>
+          <h2>Presentation / Content Sharing</h2>
+        </div>
+        <div class="section-body">
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Enable presentation stream</div>
+              <div class="toggle-desc">
+                WebRTC &amp; interop: adds +1 HD connection per presenter.
+                SIP / H.323 / Zoom: no extra resource (dual-stream is native at no extra cost).
+              </div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" v-model="presentationEnabled" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div v-if="presentationEnabled" class="inline-note">
+            Presentation overhead is shown in the HD-equivalent column of the call mix.
+            Teams always receives presentation at Full HD — included in its 1.5× multiplier.
+          </div>
+        </div>
+      </div>
+
+      <!-- ── D. Gateway / Routing ─────────────────────────────────────────── -->
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-icon">④</div>
+          <h2>Gateway &amp; Interop Overhead</h2>
+        </div>
+        <div class="section-body">
+          <label class="field-label">Interop complexity</label>
+          <div class="radio-group mb-3">
+            <div class="radio-option">
+              <input type="radio" id="gw-none" value="none" v-model="gatewayOverhead" />
+              <label for="gw-none">None (native SIP / WebRTC)</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" id="gw-light" value="light" v-model="gatewayOverhead" />
+              <label for="gw-light">Light interop (×1.5)</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" id="gw-heavy" value="heavy" v-model="gatewayOverhead" />
+              <label for="gw-heavy">Heavy interop (×1.75)</label>
+            </div>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Route traffic via Proxy / Edge nodes</div>
+              <div class="toggle-desc">
+                Doubles resource accounting — traffic is counted on both the proxy node
+                and the transcoding node behind it. Proxy nodes: 4 vCPU, 1–3 per site.
+              </div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" v-model="viaProxy" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── E. Geographic Distribution ──────────────────────────────────── -->
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-icon">⑤</div>
+          <h2>Geographic Distribution</h2>
+        </div>
+        <div class="section-body">
+          <label class="field-label">Deployment topology</label>
+          <div class="radio-group mb-3">
+            <div class="radio-option">
+              <input type="radio" id="topo-sn" :value="TOPOLOGY.single_node" v-model="topology" />
+              <label for="topo-sn">Single node</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" id="topo-ss" :value="TOPOLOGY.single_site" v-model="topology" />
+              <label for="topo-ss">Single site (multi-node)</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" id="topo-ms" :value="TOPOLOGY.multi_site" v-model="topology" />
+              <label for="topo-ms">Multi-site distributed</label>
+            </div>
+          </div>
+
+          <div v-if="topology === TOPOLOGY.single_node" class="inline-note">
+            Single node: no backplane overhead. All media mixed locally on one VM.
+          </div>
+          <div v-if="topology === TOPOLOGY.single_site" class="inline-note">
+            Multi-node site: backplane reserves <strong>1 HD per active meeting</strong> per
+            transcoding node. Media mixed locally within the site where possible.
+          </div>
+          <div v-if="topology === TOPOLOGY.multi_site" class="inline-note">
+            Multi-site: backplane overhead scales with site count ×
+            meetings. Media traverses inter-site links when conferences span sites.
+          </div>
+
+          <!-- Location builder -->
+          <div v-if="topology !== TOPOLOGY.single_node" style="margin-top:14px">
+            <div class="section-divider"></div>
+            <label class="field-label">Define locations / sites</label>
+            <div class="location-list">
+              <div class="location-row" v-for="loc in locations" :key="loc.id">
+                <input type="text" v-model="loc.name" placeholder="Site name" />
+                <select v-model="loc.type">
+                  <option value="transcoding">Transcoding</option>
+                  <option value="proxy">DMZ / Proxy</option>
+                  <option value="external_transcoding">External Transcoding</option>
+                </select>
+                <button class="btn-remove" @click="removeLocation(loc.id)" title="Remove">✕</button>
+              </div>
+            </div>
+            <button class="btn-add" @click="addLocation">＋ Add location</button>
+            <p v-if="topology === TOPOLOGY.multi_site && locations.length === 0" class="text-muted" style="margin-top:6px">
+              Add at least one location to model backplane overhead accurately.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── F. Concurrency Model ─────────────────────────────────────────── -->
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-icon">⑥</div>
+          <h2>Concurrency Model</h2>
+        </div>
+        <div class="section-body">
+          <div class="field-row">
+            <div class="field-group">
+              <label class="field-label">Total users</label>
+              <input type="number" v-model.number="totalUsers" min="1" step="1" />
+            </div>
+            <div class="field-group">
+              <label class="field-label">Simultaneous meetings</label>
+              <input type="number" v-model.number="numberOfMeetings" min="1" step="1" />
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">
+              Peak concurrent users —
+              <strong style="color:var(--pex-teal-dark)">{{ peakConcurrentPct }}%</strong>
+              = <strong style="color:var(--pex-teal-dark)">{{ peakParticipants }}</strong> participants
+            </label>
+            <div class="slider-row">
+              <input type="range" v-model.number="peakConcurrentPct" min="1" max="100" step="1" />
+              <span class="slider-value">{{ peakConcurrentPct }}%</span>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Avg. participants per meeting</label>
+            <input type="number" v-model.number="avgParticipantsPerMeeting" min="2" step="1"
+                   style="width:100px" />
+          </div>
+
+          <div class="inline-note">
+            Many small meetings → more backplane reservations per participant.
+            Adjust simultaneous meeting count to reflect your typical load pattern.
+          </div>
+        </div>
+      </div>
+
+      <!-- ── G. Hardware Configuration ───────────────────────────────────── -->
+      <div class="section-card">
+        <div class="section-header">
+          <div class="section-icon">⑦</div>
+          <h2>Hardware Configuration</h2>
+        </div>
+        <div class="section-body">
+
+          <label class="field-label">CPU Vendor</label>
+          <div class="radio-group mb-3">
+            <div class="radio-option">
+              <input type="radio" id="cpu-intel" value="intel" v-model="cpuVendor" />
+              <label for="cpu-intel">Intel Xeon</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" id="cpu-amd" value="amd" v-model="cpuVendor" />
+              <label for="cpu-amd">AMD EPYC</label>
+            </div>
+          </div>
+
+          <label class="field-label">Instruction Set Support</label>
+          <div class="radio-group mb-3">
+            <div class="radio-option">
+              <input type="radio" id="isa-legacy" value="legacy" v-model="cpuInstructionSet" />
+              <label for="isa-legacy">Legacy (no AVX)</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" id="isa-avx2" value="avx2" v-model="cpuInstructionSet" />
+              <label for="isa-avx2">AVX2</label>
+            </div>
+            <div class="radio-option">
+              <input type="radio" id="isa-avx512" value="avx512" v-model="cpuInstructionSet" />
+              <label for="isa-avx512">AVX-512</label>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field-group">
+              <label class="field-label">
+                Base clock —
+                <strong style="color:var(--pex-teal-dark)">{{ cpuClockGhz.toFixed(1) }} GHz</strong>
+              </label>
+              <div class="slider-row">
+                <input type="range" v-model.number="cpuClockGhz" min="1.0" max="4.5" step="0.1" />
+                <span class="slider-value">{{ cpuClockGhz.toFixed(1) }}</span>
+              </div>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Physical cores per socket</label>
+              <input type="number" v-model.number="cpuCoresPerSocket" min="4" max="128" step="1" />
+            </div>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <label class="field-label">Transcoding node vCPU size</label>
+          <div class="radio-group mb-3">
+            <div class="radio-option" v-for="size in NODE_SIZES" :key="size">
+              <input type="radio" :id="'ns-'+size" :value="size" v-model="nodeVcpuSize" />
+              <label :for="'ns-'+size">{{ size }} vCPU</label>
+            </div>
+          </div>
+
+          <!-- NUMA alignment indicator -->
+          <div class="breakdown-row">
+            <span class="bd-label">Node vCPU vs cores per socket</span>
+            <span class="bd-val" :style="nodeVcpuSize > cpuCoresPerSocket ? 'color:var(--warn-amber)' : 'color:var(--success)'">
+              {{ nodeVcpuSize }}
+              <span v-if="nodeVcpuSize <= cpuCoresPerSocket"> ✓ fits within one NUMA node</span>
+              <span v-else-if="!hyperthreading"> ⚠ spans NUMA nodes — enable HT or reduce size</span>
+              <span v-else> (HT pinning required)</span>
+            </span>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <div class="field-row">
+            <div class="field-group">
+              <label class="field-label">Hypervisor</label>
+              <select v-model="hypervisor">
+                <option value="vmware">VMware (1.0×)</option>
+                <option value="kvm">KVM (0.95×)</option>
+                <option value="hyperv">Hyper-V (0.90×)</option>
+                <option value="cloud">Cloud / hosted (1.0×)</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Hyperthreading</label>
+              <div class="radio-group" style="margin-top:6px">
+                <div class="radio-option">
+                  <input type="radio" id="ht-off" :value="false" v-model="hyperthreading" />
+                  <label for="ht-off">OFF (1:1 vCPU/core)</label>
+                </div>
+                <div class="radio-option">
+                  <input type="radio" id="ht-on" :value="true" v-model="hyperthreading" />
+                  <label for="ht-on">ON + pinned (+40%)</label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="inline-note">
+            Reference: 2× Intel Xeon Gold 6342 (16c, 2.8 GHz, AVX-512) on 2-socket server ≈ 195 HD across 2 transcoding nodes.
+            Fewer, larger nodes outperform many smaller ones. Never overcommit CPU.
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /inputs-column -->
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         RIGHT COLUMN — RESULTS
+         ══════════════════════════════════════════════════════════════════════ -->
+    <div class="results-panel">
+
+      <!-- Warnings -->
+      <div class="warnings-panel" v-if="warnings.length">
+        <div class="warnings-header">
+          ⚠&nbsp; {{ warnings.length }} Configuration Warning{{ warnings.length !== 1 ? 's' : '' }}
+        </div>
+        <div class="warning-item" v-for="(w, i) in warnings" :key="i">
+          <span class="warning-icon">
+            <template v-if="w.type === 'numa'">🔲</template>
+            <template v-else-if="w.type === 'vp9'">⚡</template>
+            <template v-else-if="w.type === 'ht'">📌</template>
+            <template v-else>⚠</template>
+          </span>
+          <span>{{ w.text }}</span>
+        </div>
+      </div>
+
+      <!-- ── Resource Summary ─────────────────────────────────────────────── -->
+      <div class="result-card">
+        <div class="result-card-header">Resource Summary</div>
+        <div class="result-card-body">
+          <div class="stat-grid">
+            <div class="stat-box">
+              <div class="stat-value">{{ fmtHD(totalHDRaw) }}</div>
+              <div class="stat-label">HD Connections (raw)</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value">{{ fmtHD(totalHDWithHeadroom) }}</div>
+              <div class="stat-label">With 25% Headroom</div>
+            </div>
+            <div class="stat-box accent">
+              <div class="stat-value">{{ vCPURequired }}</div>
+              <div class="stat-label">vCPU Required</div>
+            </div>
+            <div class="stat-box accent">
+              <div class="stat-value">{{ transcodingNodeCount }}</div>
+              <div class="stat-label">Transcoding Nodes</div>
+            </div>
+          </div>
+
+          <div style="margin-top:14px">
+            <div class="breakdown-row">
+              <span class="bd-label">Base HD connections</span>
+              <span class="bd-val">{{ fmtHD(rowResults.reduce((a,r) => a + r.hdBase, 0)) }} HD</span>
+            </div>
+            <div class="breakdown-row" v-if="presentationEnabled">
+              <span class="bd-label">Presentation overhead</span>
+              <span class="bd-val bd-highlight">
+                +{{ fmtHD(rowResults.reduce((a,r) => a + r.hdPresentation, 0)) }} HD
+              </span>
+            </div>
+            <div class="breakdown-row" v-if="backplaneHD > 0">
+              <span class="bd-label">Backplane ({{ numberOfMeetings }} meetings{{ topology === TOPOLOGY.multi_site ? ' × ' + numberOfSites + ' sites' : '' }})</span>
+              <span class="bd-val bd-highlight">+{{ fmtHD(backplaneHD) }} HD</span>
+            </div>
+            <div class="breakdown-row" v-if="viaProxy">
+              <span class="bd-label">Proxy doubling factor</span>
+              <span class="bd-val bd-highlight">×2.0</span>
+            </div>
+            <div class="breakdown-row">
+              <span class="bd-label">CPU efficiency</span>
+              <span class="bd-val">{{ effectiveHDperVcpu.toFixed(2) }} HD/vCPU</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Node Recommendations ──────────────────────────────────────────── -->
+      <div class="result-card">
+        <div class="result-card-header">Node Recommendations</div>
+        <div class="result-card-body" style="padding:0">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th class="num">Count</th>
+                <th class="num">vCPU</th>
+                <th class="num">RAM GB</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="rec in nodeRecommendations" :key="rec.type">
+                <td>
+                  <span class="node-type-badge"
+                    :class="{
+                      'badge-transcoding': rec.type === 'Transcoding',
+                      'badge-proxy':       rec.type === 'Proxy / Edge',
+                      'badge-management':  rec.type === 'Management',
+                    }">{{ rec.type }}</span>
+                </td>
+                <td class="num" style="font-size:18px;font-weight:800;color:var(--pex-navy)">
+                  {{ rec.count }}
+                </td>
+                <td class="num">{{ rec.vcpu }}</td>
+                <td class="num">{{ rec.ram }}</td>
+                <td style="font-size:11px;color:var(--pex-text-muted)">{{ rec.note }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Bandwidth Breakdown ───────────────────────────────────────────── -->
+      <div class="result-card">
+        <div class="result-card-header">Bandwidth Breakdown</div>
+        <div v-if="bandwidthRows.length === 0" class="no-data">
+          Add participants in the call mix to see bandwidth estimates.
+        </div>
+        <div v-else>
+          <div class="result-card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Tier / Codec</th>
+                  <th class="num">Pts</th>
+                  <th class="num">Per stream</th>
+                  <th class="num">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="bw in bandwidthRows" :key="bw.label">
+                  <td>{{ bw.label }}</td>
+                  <td class="num">{{ bw.count }}</td>
+                  <td class="num">{{ bw.perStream.toLocaleString() }} kbps</td>
+                  <td class="num">{{ (bw.total / 1000).toFixed(1) }} Gbps</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="result-card-body">
+            <div class="bw-total-row">
+              <span>Total ingress</span>
+              <span class="bw-value">{{ (totalBandwidthKbps / 1000).toFixed(2) }} Gbps</span>
+            </div>
+            <div class="bw-total-row">
+              <span>Total egress <span class="text-muted">(symmetric)</span></span>
+              <span class="bw-value">{{ (totalBandwidthKbps / 1000).toFixed(2) }} Gbps</span>
+            </div>
+            <div class="bw-total-row" v-if="interNodeBandwidthKbps > 0">
+              <span>
+                Inter-node backplane
+                <span class="text-muted">({{ numberOfMeetings }}m × {{ transcodingNodeCount }}n × 960 kbps)</span>
+              </span>
+              <span class="bw-value">{{ (interNodeBandwidthKbps / 1000).toFixed(2) }} Gbps</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── CPU Efficiency Detail ─────────────────────────────────────────── -->
+      <div class="result-card">
+        <div class="result-card-header">CPU Efficiency Model</div>
+        <div class="result-card-body">
+          <div class="efficiency-row">
+            <span class="efficiency-label">Base ({{ cpuInstructionSet.toUpperCase() }})</span>
+            <span class="efficiency-val">{{ EFFICIENCY_BASE[cpuInstructionSet] }} HD/vCPU</span>
+          </div>
+          <div class="efficiency-row">
+            <span class="efficiency-label">Clock factor ({{ cpuClockGhz.toFixed(1) }} ÷ 2.8 ref)</span>
+            <span class="efficiency-val">{{ (cpuClockGhz / 2.8).toFixed(2) }}×</span>
+          </div>
+          <div class="efficiency-row">
+            <span class="efficiency-label">Hyperthreading factor</span>
+            <span class="efficiency-val">{{ hyperthreading ? '1.40×' : '1.00×' }}</span>
+          </div>
+          <div class="efficiency-row">
+            <span class="efficiency-label">Hypervisor factor</span>
+            <span class="efficiency-val">{{ HV_FACTORS[hypervisor].toFixed(2) }}×</span>
+          </div>
+          <div class="section-divider"></div>
+          <div class="efficiency-row">
+            <span class="efficiency-label" style="font-weight:700;color:var(--pex-text)">
+              Effective HD/vCPU
+            </span>
+            <span class="efficiency-val" style="font-size:18px">{{ effectiveHDperVcpu.toFixed(2) }}</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill"
+              :style="{ width: Math.min(100, (effectiveHDperVcpu / 10) * 100) + '%' }">
+            </div>
+          </div>
+          <p class="text-muted" style="margin-top:6px">
+            Scale: 0–10 HD/vCPU. Reference 6.0 = Xeon Gold 6342 AVX-512 @ 2.8 GHz.
+          </p>
+        </div>
+      </div>
+
+      <!-- ── HD Equivalent Detail ──────────────────────────────────────────── -->
+      <div class="result-card" v-if="rowResults.some(r => r.count > 0)">
+        <div class="result-card-header">HD Equivalent Breakdown</div>
+        <div class="result-card-body" style="padding:0">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Quality</th>
+                <th class="num">Count</th>
+                <th class="num">Wt</th>
+                <th class="num">Codec</th>
+                <th class="num">Pres.</th>
+                <th class="num">Total HD</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in rowResults" :key="r.id" v-show="r.count > 0">
+                <td>{{ QUALITY_LABELS[r.quality] }}</td>
+                <td class="num">{{ r.count }}</td>
+                <td class="num">{{ QUALITY_WEIGHTS_MAP[r.quality] }}×</td>
+                <td class="num">{{ r.codec === 'vp9' ? '1.25×' : '1.00×' }}</td>
+                <td class="num">
+                  {{ presentationEnabled && r.hdPresentation > 0 ? '+' + fmtHD(r.hdPresentation) : '—' }}
+                </td>
+                <td class="num" style="font-weight:700;color:var(--pex-teal-dark)">
+                  {{ fmtHD(r.hdRow) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Reference docs ────────────────────────────────────────────────── -->
+      <div class="result-card">
+        <div class="result-card-header">Reference Documentation</div>
+        <div class="result-card-body">
+          <ul style="margin:0;padding-left:16px;font-size:12px;line-height:2.2">
+            <li><a href="https://docs.pexip.com/server_design/resource_allocation_rules.htm" target="_blank" rel="noopener">Resource Allocation Rules</a></li>
+            <li><a href="https://docs.pexip.com/admin/edge_guidelines.htm" target="_blank" rel="noopener">Edge Node Guidelines</a></li>
+            <li><a href="https://docs.pexip.com/server_design/numa_best_practices.htm" target="_blank" rel="noopener">NUMA Best Practices</a></li>
+            <li><a href="https://docs.pexip.com/admin/restricting_bandwidth.htm" target="_blank" rel="noopener">Bandwidth Restrictions</a></li>
+            <li><a href="https://www.eatyourbytes.com/list-of-cpus-with-avx512/" target="_blank" rel="noopener">CPUs with AVX-512 Reference</a></li>
+          </ul>
+        </div>
+      </div>
+
+    </div><!-- /results-panel -->
+  </div><!-- /main-layout -->
+
+  <footer>
+    Pexip Resource &amp; Capacity Calculator — estimates based on
+    <a href="https://docs.pexip.com/" target="_blank" rel="noopener">Pexip documentation</a>.
+    Results are indicative only; validate with a Pexip Solutions Architect before deployment.
+  </footer>
+
+</div><!-- /#app -->
+
+<!-- Load order: Vue global CDN → PEXIP config → app -->
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="js/config.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
