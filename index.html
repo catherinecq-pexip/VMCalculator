@@ -337,18 +337,6 @@
         </div>
         <div class="section-body">
 
-          <label class="field-label">CPU Vendor</label>
-          <div class="radio-group mb-3">
-            <div class="radio-option">
-              <input type="radio" id="cpu-intel" value="intel" v-model="cpuVendor" />
-              <label for="cpu-intel">Intel Xeon</label>
-            </div>
-            <div class="radio-option">
-              <input type="radio" id="cpu-amd" value="amd" v-model="cpuVendor" />
-              <label for="cpu-amd">AMD EPYC</label>
-            </div>
-          </div>
-
           <label class="field-label">Instruction Set Support</label>
           <div class="radio-group mb-3">
             <div class="radio-option">
@@ -431,7 +419,8 @@
           </div>
 
           <div class="inline-note">
-            Reference: 2× Intel Xeon Gold 6342 (16c, 2.8 GHz, AVX-512) on 2-socket server ≈ 195 HD across 2 transcoding nodes.
+            Reference: 16-core AVX-512 CPU at 2.8 GHz ≈ 6.0 HD/vCPU.
+            Clock speed scales capacity linearly from a 2.8 GHz baseline.
             Fewer, larger nodes outperform many smaller ones. Never overcommit CPU.
           </div>
         </div>
@@ -626,7 +615,7 @@
             </div>
           </div>
           <p class="text-muted" style="margin-top:6px">
-            Scale: 0–10 HD/vCPU. Reference 6.0 = Xeon Gold 6342 AVX-512 @ 2.8 GHz.
+            Scale: 0–10 HD/vCPU. Reference 6.0 = AVX-512 @ 2.8 GHz baseline.
           </p>
         </div>
       </div>

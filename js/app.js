@@ -80,9 +80,8 @@
       );
 
       // ── hardware ──────────────────────────────────────────────────────────
-      const cpuVendor         = ref('intel');
       const cpuInstructionSet = ref('avx2');
-      const cpuClockGhz       = ref(2.8);
+      const cpuClockGhz       = ref(3.0);
       const cpuCoresPerSocket = ref(16);
       const nodeVcpuSize      = ref(32);
       const hyperthreading    = ref(false);
@@ -302,7 +301,6 @@
         totalUsers,
         peakConcurrentPct,
         avgParticipantsPerMeeting,
-        cpuVendor,
         cpuInstructionSet,
         cpuClockGhz,
         cpuCoresPerSocket,
