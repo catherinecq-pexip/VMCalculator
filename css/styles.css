@@ -912,6 +912,116 @@ footer a:hover { text-decoration: underline; }
   font-size: 12px;
 }
 
+/* ── Meeting Builder ────────────────────────────────────────────────────────── */
+.meeting-card {
+  border: 1px solid var(--pex-border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.meeting-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: var(--pex-bg);
+  border-bottom: 1px solid var(--pex-border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.meeting-card-header:hover { background: #EDF2F7; }
+
+.meeting-card-header input[type="text"] {
+  flex: 1 1 120px;
+  min-width: 80px;
+  font-weight: 600;
+  cursor: text;
+}
+
+.meeting-card-header select {
+  flex: 0 0 auto;
+  font-size: 12px;
+  width: auto;
+}
+
+.meeting-card-body { padding: 12px; background: #fff; }
+
+.meeting-hd-badge {
+  background: var(--pex-teal-light);
+  color: var(--pex-teal-dark);
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.meeting-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #EDF2F7;
+}
+
+/* ── Participant tables inside meeting cards ─────────────────────────────────── */
+.participant-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.participant-table td { padding: 3px 4px; vertical-align: middle; }
+
+.participant-table input[type="number"] { width: 70px; }
+
+.participant-table select { width: 100%; font-size: 12px; }
+
+/* ── Endpoint assignment table in topology ───────────────────────────────────── */
+.location-endpoint-assignments { padding: 6px 0 4px; }
+
+.assign-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.assign-table td { padding: 3px 6px; vertical-align: middle; }
+
+.assign-table input[type="number"] { width: 65px; }
+
+.assign-counter {
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--pex-text-muted);
+}
+
+.assign-counter.assign-full    { color: var(--success); }
+.assign-counter.assign-partial { color: var(--warn-amber); }
+
+.location-endpoints-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pex-slate);
+  user-select: none;
+  padding: 2px 0;
+}
+
+.location-endpoints-toggle:hover { color: var(--pex-teal-dark); }
+
 /* ── Responsive tweaks ──────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .field-row, .field-row-3 { grid-template-columns: 1fr; }
