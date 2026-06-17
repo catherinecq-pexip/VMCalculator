@@ -24,29 +24,19 @@
   createApp({
     setup() {
 
-      // ── call mix ──────────────────────────────────────────────────────────
-      const callMix = reactive(C.DEFAULT_CALL_MIX.map(r => ({ ...r })));
-      const nextRowId = ref(callMix.length + 1);
+      // ── endpoint & interop model ──────────────────────────────────────────
+      const endpointRows = reactive([
+        { type: 'sip_h323',           internalCount: 0, externalCount: 0, quality: '720p', codec: 'h264', presentationOn: false },
+        { type: 'zoom',               internalCount: 0, externalCount: 0, quality: '720p', codec: 'h264', presentationOn: false },
+        { type: 'webrtc',             internalCount: 0, externalCount: 0, quality: '720p', codec: 'vp8',  presentationOn: false },
+        { type: 'teams',              internalCount: 0, externalCount: 0, quality: '720p', codec: 'h264', presentationOn: false },
+        { type: 'google_meet',        internalCount: 0, externalCount: 0, quality: '720p', codec: 'vp8',  presentationOn: false },
+        { type: 'skype_for_business', internalCount: 0, externalCount: 0, quality: '720p', codec: 'h264', presentationOn: false },
+      ]);
 
-      function addRow() {
-        callMix.push({ id: nextRowId.value++, quality: '720p', count: 0, codec: 'h264' });
-      }
-      function removeRow(id) {
-        const idx = callMix.findIndex(r => r.id === id);
-        if (idx !== -1) callMix.splice(idx, 1);
-      }
-
-      // ── endpoint types ────────────────────────────────────────────────────
-      const endpointTypes = reactive(
-        Object.fromEntries(Object.keys(C.ENDPOINT_TYPES).map(k => [k, false]))
-      );
-      endpointTypes.sip_h323 = true; // default
-
-      // ── presentation ──────────────────────────────────────────────────────
-      const presentationEnabled = ref(false);
-
-      // ── gateway ───────────────────────────────────────────────────────────
-      const gatewayOverhead = ref('none');
+      // ── Teams Adaptive Composition ────────────────────────────────────────
+      const teamsAdaptiveComposition = ref(true);
+      const teamsOnStageCount        = ref(3);
 
       // ── topology — deployment topology builder ────────────────────────────
       const locations = reactive([]);
@@ -116,69 +106,68 @@
       const hyperthreading    = ref(false);
       const hypervisor        = ref('vmware');
 
-      // ── derived flags ─────────────────────────────────────────────────────
-      const hasWebRTC = computed(() => endpointTypes.webrtc);
+      // ── interop / codec flags ─────────────────────────────────────────────
       const hasInterop = computed(() =>
-        endpointTypes.teams || endpointTypes.google_meet || endpointTypes.interop
+        endpointRows.some(r => (Number(r.internalCount) + Number(r.externalCount)) > 0
+          && ['teams', 'google_meet', 'skype_for_business'].includes(r.type))
       );
+      const hasTeams = computed(() => {
+        const r = endpointRows.find(e => e.type === 'teams');
+        return !!(r && (Number(r.internalCount) + Number(r.externalCount)) > 0);
+      });
 
-      // ── step 1+2+3: per-row HD calculation ───────────────────────────────
+      // ── per-endpoint-type HD & bandwidth calculation ───────────────────────
       const rowResults = computed(() =>
-        callMix.map(row => {
-          const count   = Number(row.count) || 0;
-          const weight  = C.QUALITY_WEIGHTS[row.quality] ?? 1.0;
-          const codecFx = row.codec === 'vp9' ? C.VP9_RESOURCE_FACTOR : 1.0;
+        endpointRows.map(row => {
+          const def        = C.ENDPOINT_TYPES[row.type] ?? {};
+          const intCount   = Number(row.internalCount) || 0;
+          const extCount   = Number(row.externalCount) || 0;
+          const totalCount = intCount + extCount;
+          const weight     = C.QUALITY_WEIGHTS[row.quality] ?? 1.0;
+          const codecFactor = row.codec === 'vp9' ? C.VP9_RESOURCE_FACTOR : 1.0;
+          const connFactor  = def.connectionFactor ?? 1.0;
 
-          // Step 1: base HD for this quality tier
-          let hdBase = count * weight * codecFx;
+          const basePerCall    = weight * connFactor * codecFactor;
+          const proxyFactor    = viaProxy.value ? C.PROXY_RESOURCE_FACTOR : 1.0;
+          const hdInternal     = intCount * basePerCall;
+          const hdExternal     = extCount * basePerCall * proxyFactor;
+          const hdPresentation = (def.presentationExtra && row.presentationOn)
+            ? totalCount * (def.presentationHD ?? 1.0) : 0;
+          const hdRow          = hdInternal + hdExternal + hdPresentation;
 
-          // Step 2: presentation stream additions
-          let hdPresentation = 0;
-          if (presentationEnabled.value) {
-            if (hasWebRTC.value) {
-              hdPresentation += count * (C.ENDPOINT_TYPES.webrtc.presentationHD ?? 1.0);
-            }
-            if (endpointTypes.teams) {
-              hdPresentation += count * (C.ENDPOINT_TYPES.teams.presentationHD ?? 0.5);
-            }
-            if (endpointTypes.google_meet) {
-              hdPresentation += count * (C.ENDPOINT_TYPES.google_meet.presentationHD ?? 1.0);
-            }
-            if (endpointTypes.interop) {
-              hdPresentation += count * (C.ENDPOINT_TYPES.interop.presentationHD ?? 1.0);
-            }
-          }
-
-          // Step 3: gateway overhead (apply to base, not presentation)
-          const gwFactor = C.GATEWAY_OVERHEAD[gatewayOverhead.value] ?? 1.0;
-          const gatewayActive = hasInterop.value || gatewayOverhead.value !== 'none';
-          const hdAfterGateway = gatewayActive
-            ? hdBase * gwFactor + hdPresentation
-            : hdBase + hdPresentation;
-
-          // Bandwidth for this row
-          const bwKey     = row.quality + '-' + row.codec;
-          const bwPerStream = C.BANDWIDTH_TABLE[bwKey] ?? 0;
+          const bwKey       = row.quality + '-' + row.codec;
+          const bwFallback  = row.quality + '-h264';
+          const bwPerStream = C.BANDWIDTH_TABLE[bwKey] ?? C.BANDWIDTH_TABLE[bwFallback] ?? 0;
 
           return {
-            id:            row.id,
-            quality:       row.quality,
-            codec:         row.codec,
-            count,
-            hdBase,
-            hdPresentation,
-            hdRow:         hdAfterGateway,
-            bwKbps:        count * bwPerStream,
-            bwPerStream,
+            type: row.type, intCount, extCount, totalCount,
+            hdInternal, hdExternal, hdPresentation, hdRow,
+            bwLan: intCount * bwPerStream,
+            bwWan: extCount * bwPerStream,
+            bwKbps: totalCount * bwPerStream,
+            bwPerStream, quality: row.quality, codec: row.codec,
           };
         })
       );
 
-      // ── step 4: proxy doubling ────────────────────────────────────────────
-      const totalHDBeforeBackplane = computed(() => {
-        const sum = rowResults.value.reduce((a, r) => a + r.hdRow, 0);
-        return viaProxy.value ? sum * C.PROXY_RESOURCE_FACTOR : sum;
+      // ── Teams Adaptive Composition overhead ───────────────────────────────
+      const teamsCompositionHD = computed(() => {
+        if (!teamsAdaptiveComposition.value || !hasTeams.value) return 0;
+        const m     = numberOfMeetings.value || 0;
+        const extra = Math.max(0, (teamsOnStageCount.value || 3) - 3) * C.TEAMS_COMPOSITION_HD_ONSTAGE;
+        return m * (C.TEAMS_COMPOSITION_HD_BASE + extra);
       });
+
+      // ── derived participant totals ─────────────────────────────────────────
+      const totalParticipants = computed(() => rowResults.value.reduce((a, r) => a + r.totalCount, 0));
+      const totalInternalPts  = computed(() => rowResults.value.reduce((a, r) => a + r.intCount, 0));
+      const totalExternalPts  = computed(() => rowResults.value.reduce((a, r) => a + r.extCount, 0));
+      const wanBandwidthKbps  = computed(() => rowResults.value.reduce((a, r) => a + r.bwWan, 0));
+
+      // ── step 4: HD sum + composition overhead (proxy doubling embedded per-row) ──
+      const totalHDBeforeBackplane = computed(() =>
+        rowResults.value.reduce((a, r) => a + r.hdRow, 0) + teamsCompositionHD.value
+      );
 
       // ── step 5: backplane overhead ────────────────────────────────────────
       const backplaneHD = computed(() => {
@@ -257,10 +246,16 @@
             text: 'Topology has locations defined but no Transcoding nodes. Add at least one Transcoding (Internal) node to drive resource calculations.',
           });
         }
-        if (callMix.some(r => r.codec === 'vp9')) {
+        if (endpointRows.some(r => r.codec === 'vp9' && (Number(r.internalCount) + Number(r.externalCount)) > 0)) {
           w.push({
             type: 'vp9',
-            text: 'VP9 rows carry a 25% resource overhead. VP9 saves bandwidth but increases node load — account for this when setting bandwidth limits.',
+            text: 'VP9 selected for WebRTC: +25% node resource overhead vs VP8/H.264. VP9 saves ~33% bandwidth but increases CPU load — account for this when sizing nodes.',
+          });
+        }
+        if (hasTeams.value && teamsAdaptiveComposition.value && (teamsOnStageCount.value || 0) > 3) {
+          w.push({
+            type: 'ht',
+            text: `Teams Adaptive Composition: ${teamsOnStageCount.value} on-stage participants adds ${fmtHD(teamsCompositionHD.value)} HD overhead across ${numberOfMeetings.value} conference(s). Reduce on-stage count to lower composition load.`,
           });
         }
         if (hyperthreading.value) {
@@ -331,35 +326,41 @@
         return rows;
       });
 
-      // ── bandwidth breakdown per row ────────────────────────────────────────
+      // ── bandwidth breakdown per endpoint type ─────────────────────────────
       const bandwidthRows = computed(() =>
         rowResults.value
-          .filter(r => r.count > 0)
+          .filter(r => r.totalCount > 0)
           .map(r => ({
-            label:      (C.QUALITY_LABELS[r.quality] ?? r.quality) + ' (' + r.codec.toUpperCase() + ')',
-            count:      r.count,
-            perStream:  r.bwPerStream,
-            total:      r.bwKbps,
+            label:     (C.ENDPOINT_TYPES[r.type]?.label ?? r.type)
+                       + ' (' + r.codec.toUpperCase() + ')',
+            count:     r.totalCount,
+            perStream: r.bwPerStream,
+            total:     r.bwKbps,
+            wan:       r.bwWan,
           }))
       );
 
       // ── lookup tables exposed to template ─────────────────────────────────
       const EFFICIENCY_BASE = { legacy: 2.5, avx2: 4.0, avx512: 6.0 };
       const HV_FACTORS      = { vmware: 1.0, kvm: 0.95, hyperv: 0.90, cloud: 1.0 };
-      const QUALITY_WEIGHTS_MAP = C.QUALITY_WEIGHTS;
 
       // ── return ─────────────────────────────────────────────────────────────
       return {
-        // state
-        callMix,
-        endpointTypes,
-        presentationEnabled,
-        gatewayOverhead,
+        // endpoint model state
+        endpointRows,
+        teamsAdaptiveComposition,
+        teamsOnStageCount,
+
+        // topology state
         locations,
+
+        // concurrency state
         numberOfMeetings,
         totalUsers,
         peakConcurrentPct,
         avgParticipantsPerMeeting,
+
+        // hardware state
         cpuInstructionSet,
         cpuClockGhz,
         cpuCoresPerSocket,
@@ -367,9 +368,18 @@
         hyperthreading,
         hypervisor,
 
-        // computed
-        peakParticipants,
+        // computed — endpoint model
         rowResults,
+        teamsCompositionHD,
+        totalParticipants,
+        totalInternalPts,
+        totalExternalPts,
+        wanBandwidthKbps,
+        hasInterop,
+        hasTeams,
+
+        // computed — resource pipeline
+        peakParticipants,
         totalHDRaw,
         totalHDWithHeadroom,
         backplaneHD,
@@ -382,6 +392,8 @@
         warnings,
         nodeRecommendations,
         bandwidthRows,
+
+        // computed — topology
         numberOfSites,
         viaProxy,
         totalDefinedTranscodingNodes,
@@ -391,9 +403,7 @@
         transcodingLocations,
         topologyMode,
 
-        // actions
-        addRow,
-        removeRow,
+        // actions — topology
         addLocation,
         removeLocation,
         addNodeToLocation,
@@ -401,13 +411,16 @@
         toggleLocation,
 
         // constants for template
-        ENDPOINT_TYPES:    C.ENDPOINT_TYPES,
-        QUALITY_LABELS:    C.QUALITY_LABELS,
-        NODE_SIZES:        C.NODE_SIZES,
-        NODE_ROLES:        C.NODE_ROLES,
+        ENDPOINT_TYPES:           C.ENDPOINT_TYPES,
+        ENDPOINT_CODEC:           C.ENDPOINT_CODEC,
+        ENDPOINT_QUALITY_OPTIONS: C.ENDPOINT_QUALITY_OPTIONS,
+        TEAMS_COMPOSITION_HD_BASE:    C.TEAMS_COMPOSITION_HD_BASE,
+        TEAMS_COMPOSITION_HD_ONSTAGE: C.TEAMS_COMPOSITION_HD_ONSTAGE,
+        NODE_SIZES:               C.NODE_SIZES,
+        NODE_ROLES:               C.NODE_ROLES,
+        QUALITY_LABELS:           C.QUALITY_LABELS,
         EFFICIENCY_BASE,
         HV_FACTORS,
-        QUALITY_WEIGHTS_MAP,
 
         // formatters
         fmtHD,

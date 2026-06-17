@@ -58,169 +58,131 @@
          ══════════════════════════════════════════════════════════════════════ -->
     <div class="inputs-column">
 
-      <!-- ── A. Call Mix ──────────────────────────────────────────────────── -->
+      <!-- ── ①. Endpoint & Interop Model ────────────────────────────────── -->
       <div class="section-card">
         <div class="section-header">
           <div class="section-icon">①</div>
-          <h2>Call Mix &amp; Quality Tiers</h2>
-          <span class="section-hint">1080p=2× · 720p=1× · SD=0.5× · Audio=1/16×</span>
+          <h2>Endpoint &amp; Interop Model</h2>
+          <span class="section-hint">Platform rules auto-applied · Interop derived from endpoint mix</span>
         </div>
         <div class="section-body">
-          <table class="mix-table">
+
+          <!-- Endpoint composition table -->
+          <table class="endpoint-table">
             <thead>
               <tr>
+                <th>Endpoint Type</th>
+                <th class="num">Internal</th>
+                <th class="num">External</th>
                 <th>Quality</th>
-                <th>Participants</th>
                 <th>Codec</th>
-                <th>HD equiv.</th>
-                <th></th>
+                <th>Presentation</th>
+                <th class="num">HD equiv.</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in callMix" :key="row.id">
+              <tr v-for="(row, idx) in endpointRows" :key="row.type">
+                <td class="type-cell">{{ ENDPOINT_TYPES[row.type]?.label ?? row.type }}</td>
                 <td>
-                  <select v-model="row.quality" style="width:130px">
-                    <option v-for="(label, key) in QUALITY_LABELS" :key="key" :value="key">
-                      {{ label }}
+                  <input type="number" v-model.number="row.internalCount" min="0" step="1" placeholder="0" />
+                </td>
+                <td>
+                  <input type="number" v-model.number="row.externalCount" min="0" step="1" placeholder="0" />
+                </td>
+                <td>
+                  <select v-model="row.quality">
+                    <option v-for="q in ENDPOINT_QUALITY_OPTIONS" :key="q.value" :value="q.value">
+                      {{ q.label }}
                     </option>
                   </select>
                 </td>
                 <td>
-                  <input type="number" v-model.number="row.count" min="0" step="1"
-                         style="width:90px" placeholder="0" />
-                </td>
-                <td>
-                  <select v-model="row.codec" style="width:110px">
-                    <option value="h264">H.264 / VP8</option>
-                    <option value="vp9">VP9</option>
+                  <select v-if="row.type === 'webrtc'" v-model="row.codec">
+                    <option value="vp8">VP8</option>
+                    <option value="vp9">VP9 (+25% CPU)</option>
                   </select>
+                  <span v-else class="codec-label">{{ ENDPOINT_CODEC[row.type] }}</span>
                 </td>
-                <td>
-                  <span class="hd-badge">
-                    {{ fmtHD(rowResults.find(r => r.id === row.id)?.hdRow ?? 0) }} HD
-                  </span>
+                <td style="text-align:center">
+                  <template v-if="ENDPOINT_TYPES[row.type]?.presentationExtra">
+                    <label class="pres-toggle" :title="'+' + ENDPOINT_TYPES[row.type].presentationHD + ' HD/participant'">
+                      <input type="checkbox" v-model="row.presentationOn" />
+                      <span class="pres-label" :class="{ 'pres-on': row.presentationOn }">
+                        {{ row.presentationOn
+                          ? '+' + fmtHD(ENDPOINT_TYPES[row.type].presentationHD) + ' HD/pt'
+                          : 'Off' }}
+                      </span>
+                    </label>
+                  </template>
+                  <span v-else class="text-muted" style="font-size:11px">—</span>
                 </td>
-                <td>
-                  <button class="btn-remove" @click="removeRow(row.id)" title="Remove row">✕</button>
+                <td class="num">
+                  <span class="hd-badge">{{ fmtHD(rowResults[idx].hdRow) }} HD</span>
                 </td>
               </tr>
             </tbody>
           </table>
-          <button class="btn-add" @click="addRow">＋ Add tier row</button>
+
+          <!-- Interop auto-summary -->
+          <div class="interop-summary" v-if="hasInterop">
+            <span v-if="rowResults.find(r => r.type === 'teams')?.totalCount > 0"
+                  class="interop-pill">Teams → 1.5× factor</span>
+            <span v-if="rowResults.find(r => r.type === 'google_meet')?.totalCount > 0"
+                  class="interop-pill">Google Meet → VP8 gateway</span>
+            <span v-if="rowResults.find(r => r.type === 'skype_for_business')?.totalCount > 0"
+                  class="interop-pill">Skype for Business → H.264 gateway</span>
+            <span v-if="endpointRows.some(r => r.codec === 'vp9' && (r.internalCount + r.externalCount) > 0)"
+                  class="interop-pill">VP9 ↔ H.264 transcoding</span>
+            <span class="text-muted" style="font-size:11px">
+              Connection factors and codec overhead are applied automatically per platform.
+            </span>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <!-- Teams Adaptive Composition -->
+          <div v-if="hasTeams" class="teams-composition">
+            <div class="toggle-row" style="border-bottom:none;margin-bottom:8px;padding-bottom:0">
+              <div>
+                <div class="toggle-label">Teams Adaptive Composition overhead</div>
+                <div class="toggle-desc">
+                  +{{ TEAMS_COMPOSITION_HD_BASE }} HD/conference base (≤3 on-stage)
+                  + {{ TEAMS_COMPOSITION_HD_ONSTAGE }} HD per on-stage participant beyond 3
+                </div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" v-model="teamsAdaptiveComposition" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div v-if="teamsAdaptiveComposition">
+              <label class="field-label">
+                On-stage participants per conference —
+                <strong style="color:var(--pex-teal-dark)">{{ teamsOnStageCount }}</strong>
+                <template v-if="teamsCompositionHD > 0">
+                  &nbsp;→ <strong style="color:var(--pex-teal-dark)">+{{ fmtHD(teamsCompositionHD) }} HD</strong> total
+                </template>
+              </label>
+              <div class="slider-row">
+                <input type="range" v-model.number="teamsOnStageCount" min="1" max="10" step="1" />
+                <span class="slider-value">{{ teamsOnStageCount }}</span>
+              </div>
+            </div>
+          </div>
+
           <div class="inline-note" style="margin-top:10px">
-            VP9 codec: −33% bandwidth vs H.264, but +25% node resource cost.
-            WebRTC clients often negotiate VP9 automatically.
+            <strong>Resource rules:</strong>
+            SIP/Zoom = 1.0× · WebRTC VP8 = 1.0× · WebRTC VP9 = 1.25× ·
+            Teams = 1.5× · Google Meet = 1.0× (VP8) · Skype = 1.0×.
+            External participants route via proxy/edge nodes (×2.0 if proxy nodes are defined in the Topology Builder).
           </div>
         </div>
       </div>
 
-      <!-- ── B. Endpoint Types ────────────────────────────────────────────── -->
+      <!-- ── ②. Deployment Topology Builder ──────────────────────────────── -->
       <div class="section-card">
         <div class="section-header">
           <div class="section-icon">②</div>
-          <h2>Endpoint Types</h2>
-          <span class="section-hint">Select all that apply to this deployment</span>
-        </div>
-        <div class="section-body">
-          <div class="chip-group">
-            <span
-              v-for="(def, key) in ENDPOINT_TYPES"
-              :key="key"
-              class="chip"
-              :class="{ active: endpointTypes[key] }"
-              @click="endpointTypes[key] = !endpointTypes[key]"
-            >{{ def.label }}</span>
-          </div>
-          <div style="font-size:12px; color:var(--pex-text-muted); line-height:1.8; margin-top:8px">
-            <div v-if="endpointTypes.sip_h323">
-              <strong class="text-teal">SIP / H.323:</strong>
-              1 connection. No extra HD leg for presentation (dual-stream is native).
-            </div>
-            <div v-if="endpointTypes.webrtc">
-              <strong class="text-teal">WebRTC:</strong>
-              1 base connection + optional +1 HD presentation leg. VP9 overhead applied via codec selector.
-            </div>
-            <div v-if="endpointTypes.zoom_sip">
-              <strong class="text-teal">Zoom via SIP:</strong>
-              Treated identically to SIP — 1 connection, no extra presentation leg.
-            </div>
-            <div v-if="endpointTypes.teams">
-              <strong class="text-teal">Microsoft Teams:</strong>
-              1.5 HD per call. Presentation adds +0.5 HD. Counted as 2 legs (ingress + egress).
-            </div>
-            <div v-if="endpointTypes.google_meet">
-              <strong class="text-teal">Google Meet:</strong>
-              1.0 HD per call (VP8). Presenting from VTC adds +1.0 HD. 2 legs per call.
-            </div>
-            <div v-if="endpointTypes.interop">
-              <strong class="text-teal">Interop / Gateway:</strong>
-              2 connections per call (ingress + egress) = full 2× resource cost.
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── C. Presentation ──────────────────────────────────────────────── -->
-      <div class="section-card">
-        <div class="section-header">
-          <div class="section-icon">③</div>
-          <h2>Presentation / Content Sharing</h2>
-        </div>
-        <div class="section-body">
-          <div class="toggle-row">
-            <div>
-              <div class="toggle-label">Enable presentation stream</div>
-              <div class="toggle-desc">
-                WebRTC &amp; interop: adds +1 HD connection per presenter.
-                SIP / H.323 / Zoom: no extra resource (dual-stream is native at no extra cost).
-              </div>
-            </div>
-            <label class="toggle">
-              <input type="checkbox" v-model="presentationEnabled" />
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div v-if="presentationEnabled" class="inline-note">
-            Presentation overhead is shown in the HD-equivalent column of the call mix.
-            Teams always receives presentation at Full HD — included in its 1.5× multiplier.
-          </div>
-        </div>
-      </div>
-
-      <!-- ── D. Gateway / Routing ─────────────────────────────────────────── -->
-      <div class="section-card">
-        <div class="section-header">
-          <div class="section-icon">④</div>
-          <h2>Gateway &amp; Interop Overhead</h2>
-        </div>
-        <div class="section-body">
-          <label class="field-label">Interop complexity</label>
-          <div class="radio-group mb-3">
-            <div class="radio-option">
-              <input type="radio" id="gw-none" value="none" v-model="gatewayOverhead" />
-              <label for="gw-none">None (native SIP / WebRTC)</label>
-            </div>
-            <div class="radio-option">
-              <input type="radio" id="gw-light" value="light" v-model="gatewayOverhead" />
-              <label for="gw-light">Light interop (×1.5)</label>
-            </div>
-            <div class="radio-option">
-              <input type="radio" id="gw-heavy" value="heavy" v-model="gatewayOverhead" />
-              <label for="gw-heavy">Heavy interop (×1.75)</label>
-            </div>
-          </div>
-
-          <div class="inline-note" style="margin-top:10px">
-            Proxy and External node resource doubling is applied automatically
-            when those node roles are defined in the Deployment Topology Builder below.
-          </div>
-        </div>
-      </div>
-
-      <!-- ── E. Deployment Topology Builder ──────────────────────────────── -->
-      <div class="section-card">
-        <div class="section-header">
-          <div class="section-icon">⑤</div>
           <h2>Deployment Topology Builder</h2>
           <span class="section-hint">Define locations &amp; assign node roles</span>
         </div>
@@ -278,10 +240,10 @@
         </div>
       </div>
 
-      <!-- ── F. Concurrency Model ─────────────────────────────────────────── -->
+      <!-- ── ③. Concurrency Model ─────────────────────────────────────────── -->
       <div class="section-card">
         <div class="section-header">
-          <div class="section-icon">⑥</div>
+          <div class="section-icon">③</div>
           <h2>Concurrency Model</h2>
         </div>
         <div class="section-body">
@@ -321,10 +283,10 @@
         </div>
       </div>
 
-      <!-- ── G. Hardware Configuration ───────────────────────────────────── -->
+      <!-- ── ④. Hardware Configuration ───────────────────────────────────── -->
       <div class="section-card">
         <div class="section-header">
-          <div class="section-icon">⑦</div>
+          <div class="section-icon">④</div>
           <h2>Hardware Configuration</h2>
         </div>
         <div class="section-body">
@@ -466,22 +428,26 @@
 
           <div style="margin-top:14px">
             <div class="breakdown-row">
-              <span class="bd-label">Base HD connections</span>
-              <span class="bd-val">{{ fmtHD(rowResults.reduce((a,r) => a + r.hdBase, 0)) }} HD</span>
+              <span class="bd-label">Base endpoint HD</span>
+              <span class="bd-val">{{ fmtHD(rowResults.reduce((a,r) => a + r.hdInternal + r.hdExternal, 0)) }} HD</span>
             </div>
-            <div class="breakdown-row" v-if="presentationEnabled">
+            <div class="breakdown-row" v-if="rowResults.some(r => r.hdPresentation > 0)">
               <span class="bd-label">Presentation overhead</span>
               <span class="bd-val bd-highlight">
                 +{{ fmtHD(rowResults.reduce((a,r) => a + r.hdPresentation, 0)) }} HD
               </span>
             </div>
+            <div class="breakdown-row" v-if="viaProxy && totalExternalPts > 0">
+              <span class="bd-label">Proxy doubling ({{ totalExternalPts }} external participant{{ totalExternalPts !== 1 ? 's' : '' }})</span>
+              <span class="bd-val bd-highlight">×2.0 on external traffic</span>
+            </div>
+            <div class="breakdown-row" v-if="teamsCompositionHD > 0">
+              <span class="bd-label">Teams composition ({{ numberOfMeetings }} conf. × {{ teamsOnStageCount }} on-stage)</span>
+              <span class="bd-val bd-highlight">+{{ fmtHD(teamsCompositionHD) }} HD</span>
+            </div>
             <div class="breakdown-row" v-if="backplaneHD > 0">
               <span class="bd-label">Backplane ({{ numberOfMeetings }} meetings<template v-if="numberOfTranscodingLocations > 1"> × {{ numberOfTranscodingLocations }} sites</template>)</span>
               <span class="bd-val bd-highlight">+{{ fmtHD(backplaneHD) }} HD</span>
-            </div>
-            <div class="breakdown-row" v-if="viaProxy">
-              <span class="bd-label">Proxy/edge doubling ({{ totalDefinedProxyNodes + totalDefinedExternalNodes }} edge node{{ (totalDefinedProxyNodes + totalDefinedExternalNodes) !== 1 ? 's' : '' }})</span>
-              <span class="bd-val bd-highlight">×2.0</span>
             </div>
             <div class="breakdown-row">
               <span class="bd-label">CPU efficiency</span>
@@ -564,6 +530,10 @@
               <span>Total egress <span class="text-muted">(symmetric)</span></span>
               <span class="bw-value">{{ (totalBandwidthKbps / 1000).toFixed(2) }} Gbps</span>
             </div>
+            <div class="bw-total-row" v-if="wanBandwidthKbps > 0">
+              <span>WAN bandwidth <span class="text-muted">(external participants only)</span></span>
+              <span class="bw-value">{{ (wanBandwidthKbps / 1000).toFixed(2) }} Gbps</span>
+            </div>
             <div class="bw-total-row" v-if="interNodeBandwidthKbps > 0">
               <span>
                 Inter-node backplane
@@ -613,29 +583,37 @@
         </div>
       </div>
 
-      <!-- ── HD Equivalent Detail ──────────────────────────────────────────── -->
-      <div class="result-card" v-if="rowResults.some(r => r.count > 0)">
-        <div class="result-card-header">HD Equivalent Breakdown</div>
+      <!-- ── Endpoint & Call Mix Summary ─────────────────────────────────── -->
+      <div class="result-card" v-if="rowResults.some(r => r.totalCount > 0)">
+        <div class="result-card-header">Endpoint &amp; Call Mix Summary</div>
         <div class="result-card-body" style="padding:0">
           <table class="data-table">
             <thead>
               <tr>
+                <th>Endpoint Type</th>
                 <th>Quality</th>
-                <th class="num">Count</th>
-                <th class="num">Wt</th>
-                <th class="num">Codec</th>
-                <th class="num">Pres.</th>
-                <th class="num">Total HD</th>
+                <th class="num">Internal</th>
+                <th class="num">External</th>
+                <th class="num">HD Total</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="r in rowResults" :key="r.id" v-show="r.count > 0">
-                <td>{{ QUALITY_LABELS[r.quality] }}</td>
-                <td class="num">{{ r.count }}</td>
-                <td class="num">{{ QUALITY_WEIGHTS_MAP[r.quality] }}×</td>
-                <td class="num">{{ r.codec === 'vp9' ? '1.25×' : '1.00×' }}</td>
+              <tr v-for="r in rowResults" :key="r.type" v-show="r.totalCount > 0">
+                <td>
+                  <span class="node-type-badge badge-transcoding" style="font-size:10px">
+                    {{ ENDPOINT_TYPES[r.type]?.label ?? r.type }}
+                  </span>
+                </td>
+                <td style="font-size:11px;color:var(--pex-text-muted)">
+                  {{ QUALITY_LABELS[r.quality] ?? r.quality }}
+                  <span v-if="r.codec === 'vp9'" style="color:var(--pex-purple);font-weight:600"> · VP9</span>
+                </td>
                 <td class="num">
-                  {{ presentationEnabled && r.hdPresentation > 0 ? '+' + fmtHD(r.hdPresentation) : '—' }}
+                  <span class="int-badge">{{ r.intCount }}</span>
+                </td>
+                <td class="num">
+                  <span class="ext-badge" v-if="r.extCount > 0">{{ r.extCount }}</span>
+                  <span v-else class="text-muted">—</span>
                 </td>
                 <td class="num" style="font-weight:700;color:var(--pex-teal-dark)">
                   {{ fmtHD(r.hdRow) }}
@@ -643,6 +621,16 @@
               </tr>
             </tbody>
           </table>
+        </div>
+        <div class="result-card-body" style="padding:8px 16px">
+          <div class="breakdown-row">
+            <span class="bd-label">Total participants</span>
+            <span class="bd-val">
+              <span class="int-badge">{{ totalInternalPts }} internal</span>
+              &nbsp;
+              <span class="ext-badge" v-if="totalExternalPts > 0">{{ totalExternalPts }} external</span>
+            </span>
+          </div>
         </div>
       </div>
 
