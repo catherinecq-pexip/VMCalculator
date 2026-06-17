@@ -15,14 +15,19 @@ window.PEXIP = {
   VP9_RESOURCE_FACTOR: 1.25,
 
   // Bandwidth per stream in kbps (video only; audio adds up to 64 kbps per stream)
+  // VP8 ≈ H.264 bandwidth; VP9 saves ~33% vs H.264 at same resolution
   BANDWIDTH_TABLE: {
     '1080p-h264': 2400,
+    '1080p-vp8':  2400,
     '1080p-vp9':  1600,
     '720p-h264':  960,
+    '720p-vp8':   960,
     '720p-vp9':   640,
     'sd-h264':    448,
+    'sd-vp8':     448,
     'sd-vp9':     448,
     'audio-h264': 64,
+    'audio-vp8':  64,
     'audio-vp9':  64,
   },
 
@@ -111,7 +116,35 @@ window.PEXIP = {
       presentationHD:    1.0,
       gatewayLegs:       2,
     },
+    skype_for_business: {
+      label:             'Skype for Business',
+      connectionFactor:  1.0,
+      presentationExtra: true,
+      presentationHD:    1.0,
+      gatewayLegs:       1,
+    },
   },
+
+  // Static codec label per endpoint type (null = user-selectable)
+  ENDPOINT_CODEC: {
+    sip_h323:           'H.264',
+    zoom:               'H.264',
+    webrtc:             null,
+    teams:              'MS / H.264',
+    google_meet:        'VP8',
+    skype_for_business: 'H.264',
+  },
+
+  // Quality options available in the endpoint composition table
+  ENDPOINT_QUALITY_OPTIONS: [
+    { value: 'sd',    label: 'SD (448p)'      },
+    { value: '720p',  label: 'HD (720p)'      },
+    { value: '1080p', label: 'Full HD (1080p)' },
+  ],
+
+  // Teams Adaptive Composition overhead (per conference)
+  TEAMS_COMPOSITION_HD_BASE:    1.0,  // HD reserved per conference (≤3 on-stage)
+  TEAMS_COMPOSITION_HD_ONSTAGE: 0.5,  // additional HD per on-stage participant beyond 3
 
   TOPOLOGY: {
     single_node:  'single_node',
@@ -132,10 +165,4 @@ window.PEXIP = {
     'audio': 'Audio only',
   },
 
-  DEFAULT_CALL_MIX: [
-    { id: 1, quality: '1080p', count: 0,  codec: 'h264' },
-    { id: 2, quality: '720p',  count: 10, codec: 'h264' },
-    { id: 3, quality: 'sd',    count: 5,  codec: 'h264' },
-    { id: 4, quality: 'audio', count: 5,  codec: 'h264' },
-  ],
 };
