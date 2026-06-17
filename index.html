@@ -257,7 +257,7 @@
           </div>
 
           <!-- Meeting cards -->
-          <div class="meeting-card" v-for="m in meetings" :key="m.id">
+          <div class="meeting-card" v-for="(m, mIdx) in meetings" :key="m.id">
             <div class="meeting-card-header" @click="toggleMeeting(m.id)">
               <span style="color:var(--pex-text-muted);font-size:12px">{{ m.expanded ? '▾' : '▸' }}</span>
               <input type="text" v-model="m.name" placeholder="Meeting name" @click.stop />
@@ -272,7 +272,7 @@
                 </option>
               </select>
               <span class="meeting-hd-badge">
-                {{ fmtHD(meetingResults.find(r => r.id === m.id)?.hdTotal ?? 0) }} HD
+                {{ fmtHD(meetingResults[mIdx]?.hdTotal ?? 0) }} HD
               </span>
               <button class="btn-remove" @click.stop="removeMeeting(m.id)" title="Remove meeting">✕</button>
             </div>
@@ -335,19 +335,19 @@
               </div>
 
               <!-- Meeting summary line -->
-              <div class="meeting-summary" v-if="meetingResults.find(r => r.id === m.id) as res">
-                <template v-if="res.totalPts > 0">
-                  <span class="int-badge">{{ res.totalPts - res.extPts }} internal</span>
-                  <span class="ext-badge" v-if="res.extPts > 0">{{ res.extPts }} external</span>
-                  <span v-if="res.hasCrossLocation" class="interop-pill"
+              <div class="meeting-summary">
+                <template v-if="meetingResults[mIdx]?.totalPts > 0">
+                  <span class="int-badge">{{ meetingResults[mIdx].totalPts - meetingResults[mIdx].extPts }} internal</span>
+                  <span class="ext-badge" v-if="meetingResults[mIdx].extPts > 0">{{ meetingResults[mIdx].extPts }} external</span>
+                  <span v-if="meetingResults[mIdx].hasCrossLocation" class="interop-pill"
                         style="background:var(--warn-amber-bg);color:var(--warn-amber)">
                     Cross-location → backplane active
                   </span>
-                  <span v-if="res.hdComposition > 0" class="interop-pill">
-                    Adaptive comp +{{ fmtHD(res.hdComposition) }} HD
+                  <span v-if="meetingResults[mIdx].hdComposition > 0" class="interop-pill">
+                    Adaptive comp +{{ fmtHD(meetingResults[mIdx].hdComposition) }} HD
                   </span>
-                  <span v-if="m.presentationActive && res.hdPresentation > 0" class="interop-pill">
-                    Presentation +{{ fmtHD(res.hdPresentation) }} HD
+                  <span v-if="m.presentationActive && meetingResults[mIdx].hdPresentation > 0" class="interop-pill">
+                    Presentation +{{ fmtHD(meetingResults[mIdx].hdPresentation) }} HD
                   </span>
                 </template>
                 <span v-else class="text-muted" style="font-size:11px;font-style:italic">
