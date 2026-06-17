@@ -15,7 +15,7 @@ Architects and customers use this tool to answer:
 - How much bandwidth will peak concurrent calls consume?
 - Do I need proxy/edge nodes, and how many?
 
-Inputs cover call quality mix, endpoint types (WebRTC, SIP/H.323, Microsoft Teams, Google Meet, interop gateways), topology (single node, single site, multi-site), and hardware characteristics. The output is a node recommendation table, vCPU count, and bandwidth estimate.
+Inputs cover call quality mix, endpoint types (WebRTC, SIP/H.323, Microsoft Teams, Google Meet, interop gateways), a Deployment Topology Builder where each location holds named nodes with explicit roles (Transcoding Internal, Proxy DMZ/Edge, External Public-facing), and hardware characteristics. The output is a node recommendation table per location, vCPU count, and bandwidth estimate.
 
 ---
 
@@ -75,23 +75,26 @@ Applied to `hdBase` (not presentation) when gateway interop is active:
 
 ### Step 4 — Proxy doubling
 
-If calls route via a proxy/edge node, every stream is handled twice (once at the proxy, once at the transcoding node):
+Applied automatically when one or more **Proxy (DMZ/Edge)** or **External (Public-facing)** nodes are defined in the Deployment Topology Builder. Every stream is handled twice — once at the edge node and once at the transcoding node behind it:
 
 ```
+viaProxy = (proxyNodeCount + externalNodeCount) > 0
 totalHDBeforeBackplane = sum(hdRow) × (viaProxy ? 2.0 : 1.0)
 ```
 
 ### Step 5 — Backplane overhead
 
+Derived from the nodes defined in the Deployment Topology Builder, not a manual topology selection:
+
 ```
-backplaneHD = meetings × siteFactor × BACKPLANE_HD_PER_MEETING
+backplaneHD = meetings × numberOfTranscodingLocations × BACKPLANE_HD_PER_MEETING
 ```
 
-| Topology     | siteFactor               |
-|--------------|--------------------------|
-| Single node  | 0 (no backplane)         |
-| Single site  | 1                        |
-| Multi-site   | number of locations      |
+| Condition | backplaneHD |
+|-----------|-------------|
+| 0 or 1 Transcoding node defined | 0 (no backplane) |
+| 2+ Transcoding nodes in 1 location | meetings × 1 × 1.0 |
+| Transcoding nodes across N locations | meetings × N × 1.0 |
 
 ### Step 6 — Headroom
 
@@ -127,10 +130,7 @@ vCPURequired       = ceil(totalHDWithHeadroom / effectiveHDperVcpu)
 transcodingNodes   = ceil(vCPURequired / nodeVcpuSize)
 ```
 
-Proxy node count:
-- Single node topology: 0
-- Single site with proxy: 1
-- Multi-site with proxy: max(2, numberOfSites)
+Proxy node count equals the number of **Proxy (DMZ/Edge)** and **External (Public-facing)** nodes defined explicitly in the Deployment Topology Builder. Node recommendations show one Transcoding row per location when multiple transcoding locations are defined, distributing the required vCPU count evenly.
 
 ### Step 9 — Bandwidth
 
@@ -201,7 +201,7 @@ HEADROOM_FACTOR: 1.30,  // was 1.25
    }
    ```
 2. Add a corresponding checkbox in the endpoint types section of [index.html](index.html).
-3. If the endpoint adds presentation streams, add a branch in the Step 2 block in [js/app.js](js/app.js) (around line 108) mirroring the WebRTC/Teams pattern.
+3. If the endpoint adds presentation streams, add a branch in the Step 2 block inside `rowResults` in [js/app.js](js/app.js) (the `hdPresentation` section) mirroring the WebRTC/Teams pattern.
 
 ### Adding a new quality tier or codec
 
@@ -212,7 +212,18 @@ HEADROOM_FACTOR: 1.30,  // was 1.25
 
 ### Adding a new CPU instruction set
 
-Add an entry to `CPU_EFFICIENCY_TABLE` in [js/config.js](js/config.js) and expose it in the `EFFICIENCY_BASE` object near the bottom of `setup()` in [js/app.js](js/app.js) (line 286) so the template can display it.
+Add an entry to `CPU_EFFICIENCY_TABLE` in [js/config.js](js/config.js) and expose it in the `EFFICIENCY_BASE` object near the bottom of `setup()` in [js/app.js](js/app.js) so the template can display it.
+
+### Adding a new node role to the Topology Builder
+
+1. Add an entry to `NODE_ROLES` in [js/config.js](js/config.js):
+   ```js
+   my_role: 'My Role (Description)',
+   ```
+2. Add an `<option>` to the role `<select>` inside `.node-row` in [index.html](index.html).
+3. In [js/app.js](js/app.js), add a `totalDefinedMyRoleNodes` computed alongside the existing `totalDefinedProxyNodes` / `totalDefinedExternalNodes` computeds.
+4. Decide whether the new role should trigger proxy-doubling (×2.0). If yes, include it in the `viaProxy` computed. If it counts toward recommendations, push a row in `nodeRecommendations`.
+5. Add a badge color class (`.badge-my-role`) to [css/styles.css](css/styles.css) and add the class binding to the `node-type-badge` span in the Node Recommendations table in [index.html](index.html).
 
 ### Modifying the calculation pipeline
 

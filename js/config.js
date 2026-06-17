@@ -119,6 +119,12 @@ window.PEXIP = {
     multi_site:   'multi_site',
   },
 
+  NODE_ROLES: {
+    transcoding: 'Transcoding (Internal)',
+    proxy:       'Proxy (DMZ / Edge)',
+    external:    'External (Public-facing)',
+  },
+
   QUALITY_LABELS: {
     '1080p': 'Full HD (1080p)',
     '720p':  'HD (720p)',

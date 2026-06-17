@@ -453,24 +453,115 @@ input[type="range"] {
   background: var(--pex-teal-light);
 }
 
-/* ── Location builder ───────────────────────────────────────────────────────── */
-.location-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
-
-.location-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 8px;
+/* ── Deployment Topology Builder ────────────────────────────────────────────── */
+.topology-status {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
   background: var(--pex-bg);
   border: 1px solid var(--pex-border);
   border-radius: 6px;
-  padding: 8px 10px;
+  font-size: 12px;
 }
 
-.location-row input,
-.location-row select {
+.topo-pill {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.topo-pill-transcoding { background: var(--pex-teal-light);   color: var(--pex-teal-dark); }
+.topo-pill-proxy       { background: var(--pex-purple-light); color: var(--pex-purple); }
+.topo-pill-external    { background: #EBF4FF;                 color: #2B6CB0; }
+.topo-mode             { color: var(--pex-text-muted); }
+.topo-warn             { color: var(--warn-amber); font-weight: 600; }
+
+.location-card {
+  border: 1px solid var(--pex-border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.location-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--pex-bg);
+  border-bottom: 1px solid var(--pex-border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.location-card-header:hover { background: #EDF2F7; }
+
+.location-expand-icon {
+  font-size: 12px;
+  color: var(--pex-text-muted);
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.location-name-input {
+  flex: 1 1 120px;
+  min-width: 80px;
+  font-weight: 600;
+  cursor: text;
+}
+
+.location-desc-input {
+  flex: 2 1 160px;
+  min-width: 80px;
+  font-size: 12px;
+  cursor: text;
+}
+
+.location-node-count {
+  font-size: 11px;
+  background: var(--pex-teal-light);
+  color: var(--pex-teal-dark);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.location-nodes {
+  padding: 10px 12px;
   background: #fff;
 }
+
+.no-nodes-hint {
+  font-size: 12px;
+  color: var(--pex-text-muted);
+  padding: 6px 0;
+  margin: 0;
+  font-style: italic;
+}
+
+.node-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px dashed #EDF2F7;
+}
+
+.node-row:last-child { border-bottom: none; }
+
+.btn-add-location {
+  width: 100%;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.badge-external { background: #EBF4FF; color: #2B6CB0; }
 
 /* ── Slider with value display ──────────────────────────────────────────────── */
 .slider-row {

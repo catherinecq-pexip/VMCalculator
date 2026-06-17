@@ -210,78 +210,70 @@
             </div>
           </div>
 
-          <div class="section-divider"></div>
-
-          <div class="toggle-row">
-            <div>
-              <div class="toggle-label">Route traffic via Proxy / Edge nodes</div>
-              <div class="toggle-desc">
-                Doubles resource accounting — traffic is counted on both the proxy node
-                and the transcoding node behind it. Proxy nodes: 4 vCPU, 1–3 per site.
-              </div>
-            </div>
-            <label class="toggle">
-              <input type="checkbox" v-model="viaProxy" />
-              <span class="toggle-slider"></span>
-            </label>
+          <div class="inline-note" style="margin-top:10px">
+            Proxy and External node resource doubling is applied automatically
+            when those node roles are defined in the Deployment Topology Builder below.
           </div>
         </div>
       </div>
 
-      <!-- ── E. Geographic Distribution ──────────────────────────────────── -->
+      <!-- ── E. Deployment Topology Builder ──────────────────────────────── -->
       <div class="section-card">
         <div class="section-header">
           <div class="section-icon">⑤</div>
-          <h2>Geographic Distribution</h2>
+          <h2>Deployment Topology Builder</h2>
+          <span class="section-hint">Define locations &amp; assign node roles</span>
         </div>
         <div class="section-body">
-          <label class="field-label">Deployment topology</label>
-          <div class="radio-group mb-3">
-            <div class="radio-option">
-              <input type="radio" id="topo-sn" :value="TOPOLOGY.single_node" v-model="topology" />
-              <label for="topo-sn">Single node</label>
-            </div>
-            <div class="radio-option">
-              <input type="radio" id="topo-ss" :value="TOPOLOGY.single_site" v-model="topology" />
-              <label for="topo-ss">Single site (multi-node)</label>
-            </div>
-            <div class="radio-option">
-              <input type="radio" id="topo-ms" :value="TOPOLOGY.multi_site" v-model="topology" />
-              <label for="topo-ms">Multi-site distributed</label>
-            </div>
+
+          <!-- Topology status bar -->
+          <div class="topology-status" v-if="locations.length > 0">
+            <span class="topo-pill topo-pill-transcoding">{{ totalDefinedTranscodingNodes }} transcoding</span>
+            <span class="topo-pill topo-pill-proxy" v-if="totalDefinedProxyNodes > 0">{{ totalDefinedProxyNodes }} proxy</span>
+            <span class="topo-pill topo-pill-external" v-if="totalDefinedExternalNodes > 0">{{ totalDefinedExternalNodes }} external</span>
+            <span class="topo-mode" v-if="topologyMode === 'single_node'">· Single node — no backplane overhead</span>
+            <span class="topo-mode" v-if="topologyMode === 'single_site'">· Single-site cluster — intra-site backplane active</span>
+            <span class="topo-mode" v-if="topologyMode === 'multi_site'">· {{ numberOfTranscodingLocations }}-site — inter-location routing active</span>
+            <span class="topo-mode topo-warn" v-if="topologyMode === 'no_transcoding'">· No transcoding nodes defined</span>
           </div>
 
-          <div v-if="topology === TOPOLOGY.single_node" class="inline-note">
-            Single node: no backplane overhead. All media mixed locally on one VM.
-          </div>
-          <div v-if="topology === TOPOLOGY.single_site" class="inline-note">
-            Multi-node site: backplane reserves <strong>1 HD per active meeting</strong> per
-            transcoding node. Media mixed locally within the site where possible.
-          </div>
-          <div v-if="topology === TOPOLOGY.multi_site" class="inline-note">
-            Multi-site: backplane overhead scales with site count ×
-            meetings. Media traverses inter-site links when conferences span sites.
-          </div>
-
-          <!-- Location builder -->
-          <div v-if="topology !== TOPOLOGY.single_node" style="margin-top:14px">
-            <div class="section-divider"></div>
-            <label class="field-label">Define locations / sites</label>
-            <div class="location-list">
-              <div class="location-row" v-for="loc in locations" :key="loc.id">
-                <input type="text" v-model="loc.name" placeholder="Site name" />
-                <select v-model="loc.type">
-                  <option value="transcoding">Transcoding</option>
-                  <option value="proxy">DMZ / Proxy</option>
-                  <option value="external_transcoding">External Transcoding</option>
+          <!-- Location cards -->
+          <div class="location-card" v-for="loc in locations" :key="loc.id">
+            <div class="location-card-header" @click="toggleLocation(loc.id)">
+              <span class="location-expand-icon">{{ loc.expanded ? '▾' : '▸' }}</span>
+              <input type="text" v-model="loc.name" placeholder="Location name (e.g. East)"
+                     @click.stop class="location-name-input" />
+              <input type="text" v-model="loc.description" placeholder="Description (optional)"
+                     @click.stop class="location-desc-input" />
+              <span class="location-node-count" v-if="loc.nodes.length > 0">
+                {{ loc.nodes.length }} node{{ loc.nodes.length !== 1 ? 's' : '' }}
+              </span>
+              <button class="btn-remove" @click.stop="removeLocation(loc.id)" title="Remove location">✕</button>
+            </div>
+            <div class="location-nodes" v-show="loc.expanded">
+              <p class="no-nodes-hint" v-if="loc.nodes.length === 0">
+                No nodes — click "Add Node" to define compute for this location.
+              </p>
+              <div class="node-row" v-for="node in loc.nodes" :key="node.id">
+                <input type="text" v-model="node.name" placeholder="Node name (optional)" />
+                <select v-model="node.role">
+                  <option value="transcoding">Transcoding (Internal)</option>
+                  <option value="proxy">Proxy (DMZ / Edge)</option>
+                  <option value="external">External (Public-facing)</option>
                 </select>
-                <button class="btn-remove" @click="removeLocation(loc.id)" title="Remove">✕</button>
+                <button class="btn-remove" @click="removeNodeFromLocation(loc.id, node.id)" title="Remove node">✕</button>
               </div>
+              <button class="btn-add" style="margin-top:6px" @click="addNodeToLocation(loc.id)">＋ Add Node</button>
             </div>
-            <button class="btn-add" @click="addLocation">＋ Add location</button>
-            <p v-if="topology === TOPOLOGY.multi_site && locations.length === 0" class="text-muted" style="margin-top:6px">
-              Add at least one location to model backplane overhead accurately.
-            </p>
+          </div>
+
+          <button class="btn-add btn-add-location" @click="addLocation">＋ Add Location</button>
+
+          <div class="inline-note" style="margin-top:10px">
+            <strong>Routing rules:</strong>
+            Calls within the same location use local transcoding (no inter-site traffic).
+            Calls spanning locations traverse inter-site links (backplane scales with site count).
+            Proxy and External nodes double resource accounting — traffic is counted at both the edge node and the transcoding node.
           </div>
         </div>
       </div>
@@ -484,11 +476,11 @@
               </span>
             </div>
             <div class="breakdown-row" v-if="backplaneHD > 0">
-              <span class="bd-label">Backplane ({{ numberOfMeetings }} meetings{{ topology === TOPOLOGY.multi_site ? ' × ' + numberOfSites + ' sites' : '' }})</span>
+              <span class="bd-label">Backplane ({{ numberOfMeetings }} meetings<template v-if="numberOfTranscodingLocations > 1"> × {{ numberOfTranscodingLocations }} sites</template>)</span>
               <span class="bd-val bd-highlight">+{{ fmtHD(backplaneHD) }} HD</span>
             </div>
             <div class="breakdown-row" v-if="viaProxy">
-              <span class="bd-label">Proxy doubling factor</span>
+              <span class="bd-label">Proxy/edge doubling ({{ totalDefinedProxyNodes + totalDefinedExternalNodes }} edge node{{ (totalDefinedProxyNodes + totalDefinedExternalNodes) !== 1 ? 's' : '' }})</span>
               <span class="bd-val bd-highlight">×2.0</span>
             </div>
             <div class="breakdown-row">
@@ -520,8 +512,9 @@
                     :class="{
                       'badge-transcoding': rec.type === 'Transcoding',
                       'badge-proxy':       rec.type === 'Proxy / Edge',
+                      'badge-external':    rec.type === 'External',
                       'badge-management':  rec.type === 'Management',
-                    }">{{ rec.type }}</span>
+                    }">{{ rec.type }}<template v-if="rec.location"> — {{ rec.location }}</template></span>
                 </td>
                 <td class="num" style="font-size:18px;font-weight:800;color:var(--pex-navy)">
                   {{ rec.count }}

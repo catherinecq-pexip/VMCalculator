@@ -47,27 +47,56 @@
 
       // ── gateway ───────────────────────────────────────────────────────────
       const gatewayOverhead = ref('none');
-      const viaProxy = ref(false);
 
-      // ── topology ──────────────────────────────────────────────────────────
-      const topology = ref(C.TOPOLOGY.single_node);
+      // ── topology — deployment topology builder ────────────────────────────
       const locations = reactive([]);
 
       function addLocation() {
         locations.push({
           id: Date.now() + Math.floor(Math.random() * 1000),
-          name: 'Location ' + (locations.length + 1),
-          type: 'transcoding',
+          name: '',
+          description: '',
+          nodes: [],
+          expanded: true,
         });
       }
       function removeLocation(id) {
         const idx = locations.findIndex(l => l.id === id);
         if (idx !== -1) locations.splice(idx, 1);
       }
+      function addNodeToLocation(locationId) {
+        const loc = locations.find(l => l.id === locationId);
+        if (loc) loc.nodes.push({ id: Date.now() + Math.floor(Math.random() * 1000), name: '', role: 'transcoding' });
+      }
+      function removeNodeFromLocation(locationId, nodeId) {
+        const loc = locations.find(l => l.id === locationId);
+        if (loc) {
+          const idx = loc.nodes.findIndex(n => n.id === nodeId);
+          if (idx !== -1) loc.nodes.splice(idx, 1);
+        }
+      }
+      function toggleLocation(id) {
+        const loc = locations.find(l => l.id === id);
+        if (loc) loc.expanded = !loc.expanded;
+      }
 
-      const numberOfSites = computed(() =>
-        topology.value === C.TOPOLOGY.multi_site ? Math.max(locations.length, 1) : 1
-      );
+      // Derived topology state
+      const allNodes                     = computed(() => locations.flatMap(l => l.nodes));
+      const totalDefinedTranscodingNodes = computed(() => allNodes.value.filter(n => n.role === 'transcoding').length);
+      const totalDefinedProxyNodes       = computed(() => allNodes.value.filter(n => n.role === 'proxy').length);
+      const totalDefinedExternalNodes    = computed(() => allNodes.value.filter(n => n.role === 'external').length);
+      const transcodingLocations         = computed(() => locations.filter(l => l.nodes.some(n => n.role === 'transcoding')));
+      const numberOfTranscodingLocations = computed(() => transcodingLocations.value.length);
+      const numberOfSites                = computed(() => Math.max(1, numberOfTranscodingLocations.value));
+      const viaProxy                     = computed(() => totalDefinedProxyNodes.value > 0 || totalDefinedExternalNodes.value > 0);
+
+      const topologyMode = computed(() => {
+        if (locations.length === 0) return 'unconfigured';
+        if (totalDefinedTranscodingNodes.value === 0) return 'no_transcoding';
+        if (totalDefinedTranscodingNodes.value === 1 && numberOfTranscodingLocations.value <= 1) return 'single_node';
+        if (numberOfTranscodingLocations.value <= 1) return 'single_site';
+        return 'multi_site';
+      });
 
       // ── concurrency ───────────────────────────────────────────────────────
       const totalUsers                = ref(100);
@@ -154,8 +183,7 @@
       // ── step 5: backplane overhead ────────────────────────────────────────
       const backplaneHD = computed(() => {
         const m = numberOfMeetings.value || 0;
-        if (topology.value === C.TOPOLOGY.single_node) return 0;
-        if (topology.value === C.TOPOLOGY.single_site) return m * C.BACKPLANE_HD_PER_MEETING;
+        if (totalDefinedTranscodingNodes.value <= 1) return 0;
         return m * numberOfSites.value * C.BACKPLANE_HD_PER_MEETING;
       });
 
@@ -181,12 +209,9 @@
         Math.max(1, Math.ceil(vCPURequired.value / nodeVcpuSize.value))
       );
 
-      const proxyNodeCount = computed(() => {
-        if (topology.value === C.TOPOLOGY.single_node) return 0;
-        if (!viaProxy.value) return 0;
-        if (topology.value === C.TOPOLOGY.single_site) return 1;
-        return Math.max(2, numberOfSites.value);
-      });
+      const proxyNodeCount = computed(() =>
+        totalDefinedProxyNodes.value + totalDefinedExternalNodes.value
+      );
 
       // ── step 9: bandwidth ─────────────────────────────────────────────────
       const totalBandwidthKbps = computed(() =>
@@ -194,7 +219,7 @@
       );
 
       const interNodeBandwidthKbps = computed(() => {
-        if (topology.value === C.TOPOLOGY.single_node) return 0;
+        if (totalDefinedTranscodingNodes.value <= 1) return 0;
         return (numberOfMeetings.value || 0) * transcodingNodeCount.value * 960;
       });
 
@@ -220,10 +245,16 @@
             text: `Avoid CPU overcommit on ${hypervisor.value === 'vmware' ? 'VMware' : hypervisor.value === 'hyperv' ? 'Hyper-V' : 'KVM'}. Pexip is CPU-intensive; maintain a 1:1 vCPU-to-pCPU ratio.`,
           });
         }
-        if (topology.value === C.TOPOLOGY.multi_site && !viaProxy.value) {
+        if (topologyMode.value === 'multi_site' && !viaProxy.value) {
           w.push({
             type: 'proxy',
-            text: 'Multi-site topology without proxy/edge nodes. Add DMZ proxy nodes in each site for external connectivity and resilience.',
+            text: 'Multi-site deployment has no Proxy or External nodes defined. Add DMZ proxy nodes in each site for external connectivity and resilience.',
+          });
+        }
+        if (topologyMode.value === 'no_transcoding' && locations.length > 0) {
+          w.push({
+            type: 'proxy',
+            text: 'Topology has locations defined but no Transcoding nodes. Add at least one Transcoding (Internal) node to drive resource calculations.',
           });
         }
         if (callMix.some(r => r.codec === 'vp9')) {
@@ -244,28 +275,58 @@
       // ── node recommendation table ─────────────────────────────────────────
       const nodeRecommendations = computed(() => {
         const rows = [];
-        rows.push({
-          type:  'Transcoding',
-          count: transcodingNodeCount.value,
-          vcpu:  nodeVcpuSize.value,
-          ram:   nodeVcpuSize.value * 2,
-          note:  `Handles media mixing — ${nodeVcpuSize.value} vCPU each`,
-        });
-        if (proxyNodeCount.value > 0) {
+        const tLocs = numberOfTranscodingLocations.value;
+
+        if (tLocs > 1) {
+          const perLoc = Math.ceil(transcodingNodeCount.value / tLocs);
+          transcodingLocations.value.forEach(loc => {
+            rows.push({
+              type:     'Transcoding',
+              location: loc.name || 'Unnamed',
+              count:    perLoc,
+              vcpu:     nodeVcpuSize.value,
+              ram:      nodeVcpuSize.value * 2,
+              note:     `${loc.name || 'Location'} — ${nodeVcpuSize.value} vCPU each`,
+            });
+          });
+        } else {
           rows.push({
-            type:  'Proxy / Edge',
-            count: proxyNodeCount.value,
-            vcpu:  C.PROXY_NODE_VCPU,
-            ram:   C.PROXY_NODE_VCPU,
-            note:  'DMZ-facing, forwards media to transcoding nodes',
+            type:     'Transcoding',
+            location: null,
+            count:    transcodingNodeCount.value,
+            vcpu:     nodeVcpuSize.value,
+            ram:      nodeVcpuSize.value * 2,
+            note:     `Handles media mixing — ${nodeVcpuSize.value} vCPU each`,
+          });
+        }
+
+        if (totalDefinedProxyNodes.value > 0) {
+          rows.push({
+            type:     'Proxy / Edge',
+            location: null,
+            count:    totalDefinedProxyNodes.value,
+            vcpu:     C.PROXY_NODE_VCPU,
+            ram:      C.PROXY_NODE_VCPU,
+            note:     'DMZ-facing, forwards media to transcoding nodes',
+          });
+        }
+        if (totalDefinedExternalNodes.value > 0) {
+          rows.push({
+            type:     'External',
+            location: null,
+            count:    totalDefinedExternalNodes.value,
+            vcpu:     C.PROXY_NODE_VCPU,
+            ram:      C.PROXY_NODE_VCPU,
+            note:     'Public-facing, routes external calls inbound',
           });
         }
         rows.push({
-          type:  'Management',
-          count: 1,
-          vcpu:  4,
-          ram:   8,
-          note:  'Always 1 — no media processing',
+          type:     'Management',
+          location: null,
+          count:    1,
+          vcpu:     4,
+          ram:      8,
+          note:     'Always 1 — no media processing',
         });
         return rows;
       });
@@ -294,8 +355,6 @@
         endpointTypes,
         presentationEnabled,
         gatewayOverhead,
-        viaProxy,
-        topology,
         locations,
         numberOfMeetings,
         totalUsers,
@@ -324,18 +383,28 @@
         nodeRecommendations,
         bandwidthRows,
         numberOfSites,
+        viaProxy,
+        totalDefinedTranscodingNodes,
+        totalDefinedProxyNodes,
+        totalDefinedExternalNodes,
+        numberOfTranscodingLocations,
+        transcodingLocations,
+        topologyMode,
 
         // actions
         addRow,
         removeRow,
         addLocation,
         removeLocation,
+        addNodeToLocation,
+        removeNodeFromLocation,
+        toggleLocation,
 
         // constants for template
         ENDPOINT_TYPES:    C.ENDPOINT_TYPES,
         QUALITY_LABELS:    C.QUALITY_LABELS,
-        TOPOLOGY:          C.TOPOLOGY,
         NODE_SIZES:        C.NODE_SIZES,
+        NODE_ROLES:        C.NODE_ROLES,
         EFFICIENCY_BASE,
         HV_FACTORS,
         QUALITY_WEIGHTS_MAP,
