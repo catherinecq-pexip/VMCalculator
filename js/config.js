@@ -95,12 +95,6 @@ window.PEXIP = {
       presentationExtra: false,
       gatewayLegs:       1,
     },
-    zoom_sip: {
-      label:             'Zoom via SIP',
-      connectionFactor:  1.0,
-      presentationExtra: false,
-      gatewayLegs:       1,
-    },
     teams: {
       label:             'Microsoft Teams',
       connectionFactor:  1.5,
@@ -111,13 +105,6 @@ window.PEXIP = {
     google_meet: {
       label:             'Google Meet',
       connectionFactor:  1.0,
-      presentationExtra: true,
-      presentationHD:    1.0,
-      gatewayLegs:       2,
-    },
-    interop: {
-      label:             'Interop / Gateway',
-      connectionFactor:  2.0,
       presentationExtra: true,
       presentationHD:    1.0,
       gatewayLegs:       2,
