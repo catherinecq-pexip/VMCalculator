@@ -89,6 +89,12 @@ window.PEXIP = {
       presentationHD:    1.0,
       gatewayLegs:       1,
     },
+    zoom: {
+      label:             'Zoom',
+      connectionFactor:  1.0,
+      presentationExtra: false,
+      gatewayLegs:       1,
+    },
     zoom_sip: {
       label:             'Zoom via SIP',
       connectionFactor:  1.0,

@@ -5,7 +5,7 @@
   'use strict';
 
   const C = window.PEXIP; // shorthand alias
-  const { createApp, reactive, computed, ref } = Vue;
+  const { createApp, reactive, computed, ref, watch } = Vue;
 
   // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -26,7 +26,6 @@
 
       // ── endpoint & interop model ──────────────────────────────────────────
       // count = total defined endpoints of this type (internal to the deployment)
-      // External participants are defined per-meeting in the Meeting Builder
       const endpointRows = reactive([
         { type: 'sip_h323',           count: 0, quality: '720p', codec: 'h264', presentationOn: false },
         { type: 'zoom',               count: 0, quality: '720p', codec: 'h264', presentationOn: false },
@@ -120,40 +119,73 @@
         endpointRows.every(r => !r.count || (unassignedEndpointCounts.value[r.type] || 0) === 0)
       );
 
-      // ── meeting builder ───────────────────────────────────────────────────
-      const meetings = reactive([]);
+      // ── meeting builder — template-based auto-generation ──────────────────
+      const meetingTemplates = reactive([]);
 
-      function addMeeting() {
-        meetings.push({
-          id: Date.now() + Math.floor(Math.random() * 1000),
-          name: '',
-          hostLocationId: null,
-          layout: 'classic',
-          presentationActive: false,
-          expanded: true,
-          participantLocations: [],
-          participantEndpoints: {
-            sip_h323: 0, zoom: 0, webrtc: 0,
-            teams: 0, google_meet: 0, skype_for_business: 0,
-          },
+      // Returns the endpoint capacity ceiling for a template (can't exceed assigned endpoints)
+      function maxCountForTemplate(tmpl) {
+        const loc = locations.find(l => l.id === tmpl.locationId);
+        if (!loc) return 0;
+        return Number(loc.endpointAssignments[tmpl.endpointType]) || 0;
+      }
+
+      function effectiveCountForTemplate(tmpl) {
+        return Math.min(Number(tmpl.meetingCount) || 0, maxCountForTemplate(tmpl));
+      }
+
+      // Derive the set of (location × endpointType) combos that should have templates
+      const autoTemplateKeys = computed(() => {
+        const keys = [];
+        locations.forEach(loc => {
+          Object.entries(loc.endpointAssignments || {}).forEach(([type, count]) => {
+            if (Number(count) > 0) {
+              keys.push({ locationId: loc.id, endpointType: type });
+            }
+          });
         });
-      }
-      function removeMeeting(id) {
-        const idx = meetings.findIndex(m => m.id === id);
-        if (idx !== -1) meetings.splice(idx, 1);
-      }
-      function toggleMeeting(id) {
-        const m = meetings.find(m => m.id === id);
-        if (m) m.expanded = !m.expanded;
-      }
-      function addParticipantLocation(meetingId) {
-        const m = meetings.find(m => m.id === meetingId);
-        if (m) m.participantLocations.push({ locationId: null, count: 0 });
-      }
-      function removeParticipantLocation(meetingId, idx) {
-        const m = meetings.find(m => m.id === meetingId);
-        if (m) m.participantLocations.splice(idx, 1);
-      }
+        return keys;
+      });
+
+      // Reconcile meetingTemplates whenever the desired set changes
+      watch(
+        () => autoTemplateKeys.value,
+        (newKeys) => {
+          const desiredSet = new Set(newKeys.map(k => k.locationId + '|' + k.endpointType));
+
+          // Remove templates whose (location, endpointType) combo no longer exists
+          for (let i = meetingTemplates.length - 1; i >= 0; i--) {
+            const t = meetingTemplates[i];
+            if (!desiredSet.has(t.locationId + '|' + t.endpointType)) {
+              meetingTemplates.splice(i, 1);
+            }
+          }
+
+          // Add templates for new combos (preserve existing config)
+          newKeys.forEach(k => {
+            const existing = meetingTemplates.find(
+              t => t.locationId === k.locationId && t.endpointType === k.endpointType
+            );
+            if (!existing) {
+              // Pre-populate participantCounts with all current locations set to 0
+              const participantCounts = { external: 0 };
+              locations.forEach(loc => { participantCounts[loc.id] = 0; });
+
+              meetingTemplates.push({
+                id: k.locationId + '-' + k.endpointType,
+                locationId: k.locationId,
+                endpointType: k.endpointType,
+                meetingCount: 1,
+                participantCounts,
+                interopTarget: null,
+                layout: 'classic',
+                presentationActive: false,
+                expanded: false,
+              });
+            }
+          });
+        },
+        { deep: true, immediate: true }
+      );
 
       // ── hardware ──────────────────────────────────────────────────────────
       const cpuInstructionSet = ref('avx2');
@@ -189,22 +221,26 @@
         return !!(r && Number(r.count) > 0);
       });
 
-      // ── per-meeting resource calculation ──────────────────────────────────
+      // ── per-template resource calculation ─────────────────────────────────
+      // Each template represents N identical meetings; we compute per-meeting HD/BW
+      // once and multiply by the effective count for aggregate totals.
       const meetingResults = computed(() =>
-        meetings.map(m => {
-          const totalPts = m.participantLocations.reduce((a, pl) => a + (Number(pl.count) || 0), 0);
-          const extPts   = m.participantLocations
-            .filter(pl => pl.locationId === 'external')
-            .reduce((a, pl) => a + (Number(pl.count) || 0), 0);
+        meetingTemplates.map(tmpl => {
+          const effectiveCount = effectiveCountForTemplate(tmpl);
+
+          // Total participants per meeting derived from participantCounts
+          const totalPts = Object.values(tmpl.participantCounts)
+            .reduce((a, c) => a + (Number(c) || 0), 0);
+          const extPts = Number(tmpl.participantCounts.external) || 0;
           const extProportion = totalPts > 0 ? extPts / totalPts : 0;
 
-          // Cross-location detection: find non-external location IDs with participants
+          // Cross-location detection
           const locIdsWithPts = new Set(
-            m.participantLocations
-              .filter(pl => pl.locationId && pl.locationId !== 'external' && (Number(pl.count) || 0) > 0)
-              .map(pl => pl.locationId)
+            Object.entries(tmpl.participantCounts)
+              .filter(([locId, count]) => locId !== 'external' && (Number(count) || 0) > 0)
+              .map(([locId]) => locId)
           );
-          const hostId = m.hostLocationId;
+          const hostId = tmpl.locationId;
           const nonHostLocs = hostId
             ? [...locIdsWithPts].filter(id => id !== hostId)
             : [...locIdsWithPts];
@@ -213,12 +249,21 @@
             || (!hostId && locIdsWithPts.size >= 1);
           const crossLocationCount = Math.max(0, nonHostLocs.length);
 
+          // Build participantEndpoints: origin type = all participants,
+          // interop target = 1 gateway leg (if set and different from origin)
+          const participantEndpoints = {};
+          endpointRows.forEach(row => { participantEndpoints[row.type] = 0; });
+          participantEndpoints[tmpl.endpointType] = (participantEndpoints[tmpl.endpointType] || 0) + totalPts;
+          if (tmpl.interopTarget && tmpl.interopTarget !== tmpl.endpointType && totalPts > 0) {
+            participantEndpoints[tmpl.interopTarget] = (participantEndpoints[tmpl.interopTarget] || 0) + 1;
+          }
+
           // HD & bandwidth per endpoint type
           let hdEndpoints = 0, hdPresentation = 0, bwLan = 0, bwWan = 0;
           const proxyFactor = viaProxy.value ? C.PROXY_RESOURCE_FACTOR : 1.0;
 
           endpointRows.forEach(row => {
-            const typeCount = Number(m.participantEndpoints[row.type]) || 0;
+            const typeCount = Number(participantEndpoints[row.type]) || 0;
             if (!typeCount) return;
             const def         = C.ENDPOINT_TYPES[row.type] ?? {};
             const weight      = C.QUALITY_WEIGHTS[row.quality] ?? 1.0;
@@ -231,7 +276,7 @@
 
             hdEndpoints += typeIntCount * base + typeExtCount * base * proxyFactor;
 
-            if (def.presentationExtra && m.presentationActive) {
+            if (def.presentationExtra && tmpl.presentationActive) {
               hdPresentation += typeCount * (def.presentationHD ?? 1.0);
             }
 
@@ -244,41 +289,61 @@
 
           // Teams Adaptive Composition per meeting (layout-driven)
           let hdComposition = 0;
-          const teamsInMeeting = Number(m.participantEndpoints.teams) || 0;
-          if (m.layout === 'adaptive' && teamsInMeeting > 0) {
+          const teamsInMeeting = Number(participantEndpoints.teams) || 0;
+          if (tmpl.layout === 'adaptive' && teamsInMeeting > 0) {
             hdComposition = C.TEAMS_COMPOSITION_HD_BASE
               + Math.max(0, teamsInMeeting - 3) * C.TEAMS_COMPOSITION_HD_ONSTAGE;
           }
 
+          const hdTotal = hdEndpoints + hdPresentation + hdComposition;
+          const loc = locations.find(l => l.id === tmpl.locationId);
+
           return {
-            id: m.id,
-            name: m.name || 'Unnamed',
-            totalPts, extPts, hdEndpoints, hdPresentation, hdComposition,
-            hdTotal: hdEndpoints + hdPresentation + hdComposition,
-            hasCrossLocation, crossLocationCount,
-            bwLan, bwWan,
+            id: tmpl.id,
+            // Display name: "Location / Endpoint Type"
+            name: (loc?.name || 'Unknown') + ' / ' + (C.ENDPOINT_TYPES[tmpl.endpointType]?.label ?? tmpl.endpointType),
+            locationName: loc?.name || 'Unknown',
+            endpointLabel: C.ENDPOINT_TYPES[tmpl.endpointType]?.label ?? tmpl.endpointType,
+            count: effectiveCount,
+            totalPts,
+            extPts,
+            hdEndpoints,
+            hdPresentation,
+            hdComposition,
+            hdTotal,
+            // Aggregate (per-meeting × count) variants for totals
+            hdTotalAll: hdTotal * effectiveCount,
+            hdEndpointsAll: hdEndpoints * effectiveCount,
+            hdPresentationAll: hdPresentation * effectiveCount,
+            hdCompositionAll: hdComposition * effectiveCount,
+            hasCrossLocation,
+            crossLocationCount,
+            bwLan,
+            bwWan,
+            bwLanAll: bwLan * effectiveCount,
+            bwWanAll: bwWan * effectiveCount,
           };
         })
       );
 
       // ── derived meeting totals ────────────────────────────────────────────
-      const numberOfMeetings  = computed(() => meetings.length);
-      const totalParticipants = computed(() => meetingResults.value.reduce((a, m) => a + m.totalPts, 0));
-      const totalExternalPts  = computed(() => meetingResults.value.reduce((a, m) => a + m.extPts, 0));
+      const numberOfMeetings  = computed(() => meetingTemplates.reduce((a, t) => a + effectiveCountForTemplate(t), 0));
+      const totalParticipants = computed(() => meetingResults.value.reduce((a, r) => a + r.totalPts * r.count, 0));
+      const totalExternalPts  = computed(() => meetingResults.value.reduce((a, r) => a + r.extPts * r.count, 0));
       const totalInternalPts  = computed(() => totalParticipants.value - totalExternalPts.value);
-      const wanBandwidthKbps  = computed(() => meetingResults.value.reduce((a, m) => a + m.bwWan, 0));
+      const wanBandwidthKbps  = computed(() => meetingResults.value.reduce((a, r) => a + r.bwWanAll, 0));
 
       // ── step 3: total HD before backplane ─────────────────────────────────
       const totalHDBeforeBackplane = computed(() =>
-        meetingResults.value.reduce((a, m) => a + m.hdTotal, 0)
+        meetingResults.value.reduce((a, r) => a + r.hdTotalAll, 0)
       );
 
-      // ── step 4: backplane — per-meeting cross-location detection ──────────
+      // ── step 4: backplane — per-template cross-location detection ─────────
       const backplaneHD = computed(() => {
         if (totalDefinedTranscodingNodes.value <= 1) return 0;
-        return meetingResults.value.reduce((a, m) =>
-          a + (m.hasCrossLocation
-            ? Math.max(1, m.crossLocationCount) * C.BACKPLANE_HD_PER_MEETING
+        return meetingResults.value.reduce((a, r) =>
+          a + (r.hasCrossLocation
+            ? Math.max(1, r.crossLocationCount) * C.BACKPLANE_HD_PER_MEETING * r.count
             : 0), 0);
       });
 
@@ -308,13 +373,13 @@
 
       // ── step 8: bandwidth ─────────────────────────────────────────────────
       const totalBandwidthKbps = computed(() =>
-        meetingResults.value.reduce((a, m) => a + m.bwLan + m.bwWan, 0)
+        meetingResults.value.reduce((a, r) => a + r.bwLanAll + r.bwWanAll, 0)
       );
       const interNodeBandwidthKbps = computed(() => {
         if (totalDefinedTranscodingNodes.value <= 1) return 0;
         return meetingResults.value
-          .filter(m => m.hasCrossLocation)
-          .reduce((a, m) => a + Math.max(1, m.crossLocationCount) * 960, 0);
+          .filter(r => r.hasCrossLocation)
+          .reduce((a, r) => a + Math.max(1, r.crossLocationCount) * 960 * r.count, 0);
       });
 
       // ── warnings ──────────────────────────────────────────────────────────
@@ -369,10 +434,10 @@
             text: 'Not all endpoints are assigned to topology locations. Open the Endpoints section within each location to complete the assignment.',
           });
         }
-        if (meetings.length === 0) {
+        if (meetingTemplates.length === 0 || numberOfMeetings.value === 0) {
           w.push({
             type: 'proxy',
-            text: 'No meetings defined. Add meetings in the Meeting Builder — resource calculations are driven by active conferences.',
+            text: 'No meetings configured. Assign endpoints to locations in ② — meeting templates are generated automatically. Set meeting counts in ③.',
           });
         }
         return w;
@@ -431,14 +496,10 @@
         unassignedEndpointCounts,
         allEndpointsAssigned,
 
-        // meeting builder
-        meetings,
+        // meeting builder — templates
+        meetingTemplates,
         meetingResults,
-        addMeeting,
-        removeMeeting,
-        toggleMeeting,
-        addParticipantLocation,
-        removeParticipantLocation,
+        maxCountForTemplate,
 
         // hardware state
         cpuInstructionSet,

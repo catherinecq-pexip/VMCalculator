@@ -75,7 +75,6 @@
                 <th class="num">Count</th>
                 <th>Quality</th>
                 <th>Codec</th>
-                <th>Presentation</th>
                 <th class="num">HD / participant</th>
               </tr>
             </thead>
@@ -98,19 +97,6 @@
                     <option value="vp9">VP9 (+25% CPU)</option>
                   </select>
                   <span v-else class="codec-label">{{ ENDPOINT_CODEC[row.type] }}</span>
-                </td>
-                <td style="text-align:center">
-                  <template v-if="ENDPOINT_TYPES[row.type]?.presentationExtra">
-                    <label class="pres-toggle" :title="'+' + ENDPOINT_TYPES[row.type].presentationHD + ' HD/participant'">
-                      <input type="checkbox" v-model="row.presentationOn" />
-                      <span class="pres-label" :class="{ 'pres-on': row.presentationOn }">
-                        {{ row.presentationOn
-                          ? '+' + fmtHD(ENDPOINT_TYPES[row.type].presentationHD) + ' HD/pt'
-                          : 'Off' }}
-                      </span>
-                    </label>
-                  </template>
-                  <span v-else class="text-muted" style="font-size:11px">—</span>
                 </td>
                 <td class="num">
                   <span class="hd-badge">{{ fmtHD(rowResults[idx].hdPerPt) }} HD</span>
@@ -138,8 +124,8 @@
             <strong>Resource rules:</strong>
             SIP/Zoom = 1.0× · WebRTC VP8 = 1.0× · WebRTC VP9 = 1.25× ·
             Teams = 1.5× · Google Meet = 1.0× (VP8) · Skype = 1.0×.
-            Assign endpoints to topology locations in ② to enable routing and
-            bandwidth accuracy. Enter participants per meeting in ③.
+            Assign endpoints to topology locations in ② — presentation overhead is
+            configured per meeting template in ③.
           </div>
         </div>
       </div>
@@ -245,116 +231,146 @@
         <div class="section-header">
           <div class="section-icon">③</div>
           <h2>Meeting Builder</h2>
-          <span class="section-hint">Model peak active conferences — resources are driven by meetings</span>
+          <span class="section-hint">Templates auto-generated from topology · set participants and scale</span>
         </div>
         <div class="section-body">
 
-          <button class="btn-add" style="width:100%;justify-content:center;margin-bottom:10px"
-                  @click="addMeeting">＋ Add Meeting</button>
-
-          <div v-if="meetings.length === 0" class="no-nodes-hint" style="padding:12px 0;font-style:normal">
-            No meetings defined. Add at least one meeting — all resource calculations are driven by active conferences.
+          <!-- Empty state -->
+          <div v-if="meetingTemplates.length === 0" class="no-nodes-hint" style="padding:16px 0;font-style:normal;text-align:center">
+            No templates yet. Add locations in ② and assign endpoints to auto-generate meeting templates.
           </div>
 
-          <!-- Meeting cards -->
-          <div class="meeting-card" v-for="(m, mIdx) in meetings" :key="m.id">
-            <div class="meeting-card-header" @click="toggleMeeting(m.id)">
-              <span style="color:var(--pex-text-muted);font-size:12px">{{ m.expanded ? '▾' : '▸' }}</span>
-              <input type="text" v-model="m.name" placeholder="Meeting name" @click.stop />
-              <select v-model="m.layout" @click.stop style="min-width:145px">
-                <option value="classic">Classic layout</option>
-                <option value="adaptive">Adaptive / Teams-like</option>
-              </select>
-              <select v-model="m.hostLocationId" @click.stop style="min-width:120px">
-                <option :value="null">— No host —</option>
-                <option v-for="loc in transcodingLocations" :key="loc.id" :value="loc.id">
-                  {{ loc.name || 'Unnamed' }}
-                </option>
-              </select>
-              <span class="meeting-hd-badge">
-                {{ fmtHD(meetingResults[mIdx]?.hdTotal ?? 0) }} HD
+          <!-- Template cards -->
+          <div class="meeting-card" v-for="tmpl in meetingTemplates" :key="tmpl.id">
+
+            <!-- Card header: fixed label + meeting count control -->
+            <div class="meeting-card-header" @click="tmpl.expanded = !tmpl.expanded">
+              <span style="color:var(--pex-text-muted);font-size:12px">{{ tmpl.expanded ? '▾' : '▸' }}</span>
+
+              <!-- Fixed template identity (location / endpoint type) -->
+              <span style="font-weight:600;font-size:13px;flex:1;min-width:0">
+                {{ locations.find(l => l.id === tmpl.locationId)?.name || 'Unknown' }}
+                <span style="color:var(--pex-text-muted);font-weight:400"> / </span>
+                {{ ENDPOINT_TYPES[tmpl.endpointType]?.label }}
               </span>
-              <button class="btn-remove" @click.stop="removeMeeting(m.id)" title="Remove meeting">✕</button>
+
+              <!-- Meeting count input -->
+              <span style="font-size:11px;color:var(--pex-text-muted);white-space:nowrap">Meetings:</span>
+              <input type="number" v-model.number="tmpl.meetingCount"
+                     min="0" :max="maxCountForTemplate(tmpl)" step="1" placeholder="1"
+                     @click.stop style="width:56px;text-align:center;margin:0 4px" />
+              <span style="font-size:11px;color:var(--pex-text-muted);white-space:nowrap">
+                / {{ maxCountForTemplate(tmpl) }} max
+              </span>
+
+              <!-- Per-meeting HD badge -->
+              <span class="meeting-hd-badge" style="margin-left:8px;white-space:nowrap">
+                {{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdTotal ?? 0) }} HD each
+              </span>
             </div>
 
-            <div v-show="m.expanded" class="meeting-card-body">
+            <!-- Expanded body: per-meeting configuration -->
+            <div v-show="tmpl.expanded" class="meeting-card-body">
 
               <!-- Presentation toggle -->
               <div class="toggle-row" style="border-bottom:none;padding-bottom:8px;margin-bottom:8px">
                 <div>
                   <div class="toggle-label">Presentation active</div>
-                  <div class="toggle-desc">Enables presentation overhead per endpoint type (WebRTC +1.0 HD/pt, Teams +0.5 HD/pt, Meet/Skype +1.0 HD/pt)</div>
+                  <div class="toggle-desc">
+                    Enables presentation overhead per endpoint type
+                    (WebRTC +1.0 HD/pt, Teams +0.5 HD/pt, Meet/Skype +1.0 HD/pt)
+                  </div>
                 </div>
                 <label class="toggle">
-                  <input type="checkbox" v-model="m.presentationActive" />
+                  <input type="checkbox" v-model="tmpl.presentationActive" />
                   <span class="toggle-slider"></span>
                 </label>
               </div>
 
               <div class="field-row">
-                <!-- Participants by location -->
+
+                <!-- Participants per meeting by location -->
                 <div class="field-group">
-                  <label class="field-label">Participants by location</label>
+                  <label class="field-label">Participants per meeting, by location</label>
                   <table class="participant-table">
-                    <tr v-for="(pl, idx) in m.participantLocations" :key="idx">
+                    <tr v-for="loc in locations" :key="loc.id">
+                      <td style="font-size:12px;min-width:80px">{{ loc.name || 'Unnamed' }}</td>
                       <td>
-                        <select v-model="pl.locationId">
-                          <option value="external">External (no location)</option>
-                          <option v-for="loc in locations" :key="loc.id" :value="loc.id">
-                            {{ loc.name || 'Unnamed' }}
-                          </option>
-                        </select>
+                        <input type="number" min="0" placeholder="0"
+                               :value="tmpl.participantCounts[loc.id] || 0"
+                               @input="tmpl.participantCounts[loc.id] = Number($event.target.value)"
+                               @click.stop />
                       </td>
-                      <td><input type="number" v-model.number="pl.count" min="0" placeholder="0" /></td>
+                    </tr>
+                    <tr>
+                      <td style="font-size:12px;color:var(--pex-text-muted)">External</td>
                       <td>
-                        <button class="btn-remove" @click="removeParticipantLocation(m.id, idx)"
-                                title="Remove">✕</button>
+                        <input type="number" min="0" placeholder="0"
+                               :value="tmpl.participantCounts.external || 0"
+                               @input="tmpl.participantCounts.external = Number($event.target.value)"
+                               @click.stop />
                       </td>
                     </tr>
                   </table>
-                  <button class="btn-add" style="margin-top:4px" @click="addParticipantLocation(m.id)">
-                    ＋ Add location
-                  </button>
                 </div>
 
-                <!-- Participants by endpoint type -->
+                <!-- Interop target + layout -->
                 <div class="field-group">
-                  <label class="field-label">Participants by endpoint type</label>
-                  <table class="participant-table">
-                    <tr v-for="row in endpointRows" :key="row.type">
-                      <td class="type-cell" style="font-size:11px;white-space:nowrap">
-                        {{ ENDPOINT_TYPES[row.type]?.label }}
-                      </td>
-                      <td>
-                        <input type="number" v-model.number="m.participantEndpoints[row.type]"
-                               min="0" placeholder="0" />
-                      </td>
-                    </tr>
-                  </table>
+                  <label class="field-label">Interop target</label>
+                  <select v-model="tmpl.interopTarget" @click.stop>
+                    <option :value="null">None</option>
+                    <option v-for="(def, key) in ENDPOINT_TYPES" :key="key"
+                            :value="key" :disabled="key === tmpl.endpointType">
+                      {{ def.label }}
+                    </option>
+                  </select>
+
+                  <label class="field-label" style="margin-top:10px">Layout</label>
+                  <select v-model="tmpl.layout" @click.stop>
+                    <option value="classic">Classic layout</option>
+                    <option value="adaptive">Adaptive / Teams-like</option>
+                  </select>
                 </div>
+
               </div>
 
-              <!-- Meeting summary line -->
+              <!-- Per-meeting summary -->
               <div class="meeting-summary">
-                <template v-if="meetingResults[mIdx]?.totalPts > 0">
-                  <span class="int-badge">{{ meetingResults[mIdx].totalPts - meetingResults[mIdx].extPts }} internal</span>
-                  <span class="ext-badge" v-if="meetingResults[mIdx].extPts > 0">{{ meetingResults[mIdx].extPts }} external</span>
-                  <span v-if="meetingResults[mIdx].hasCrossLocation" class="interop-pill"
+                <template v-if="meetingResults.find(r => r.id === tmpl.id)?.totalPts > 0">
+                  <span class="int-badge">
+                    {{ (meetingResults.find(r => r.id === tmpl.id)?.totalPts ?? 0)
+                       - (meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) }} internal
+                  </span>
+                  <span class="ext-badge"
+                        v-if="(meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) > 0">
+                    {{ meetingResults.find(r => r.id === tmpl.id)?.extPts }} external
+                  </span>
+                  <span v-if="meetingResults.find(r => r.id === tmpl.id)?.hasCrossLocation"
+                        class="interop-pill"
                         style="background:var(--warn-amber-bg);color:var(--warn-amber)">
                     Cross-location → backplane active
                   </span>
-                  <span v-if="meetingResults[mIdx].hdComposition > 0" class="interop-pill">
-                    Adaptive comp +{{ fmtHD(meetingResults[mIdx].hdComposition) }} HD
+                  <span v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdPresentation ?? 0) > 0"
+                        class="interop-pill">
+                    Presentation +{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdPresentation ?? 0) }} HD
                   </span>
-                  <span v-if="m.presentationActive && meetingResults[mIdx].hdPresentation > 0" class="interop-pill">
-                    Presentation +{{ fmtHD(meetingResults[mIdx].hdPresentation) }} HD
+                  <span v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdComposition ?? 0) > 0"
+                        class="interop-pill">
+                    Adaptive comp +{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdComposition ?? 0) }} HD
                   </span>
                 </template>
                 <span v-else class="text-muted" style="font-size:11px;font-style:italic">
-                  No participants yet — add location and endpoint counts above.
+                  Enter participant counts above to see per-meeting resource usage.
                 </span>
               </div>
             </div>
+          </div>
+
+          <!-- Footer note when templates exist -->
+          <div v-if="meetingTemplates.length > 0" class="inline-note" style="margin-top:10px">
+            <strong>{{ numberOfMeetings }} meeting{{ numberOfMeetings !== 1 ? 's' : '' }} total</strong>
+            across {{ meetingTemplates.length }} template{{ meetingTemplates.length !== 1 ? 's' : '' }}.
+            Meeting count per template is capped by the endpoint count assigned to that location.
           </div>
 
         </div>
@@ -506,15 +522,15 @@
           <div style="margin-top:14px">
             <div class="breakdown-row">
               <span class="bd-label">Endpoint HD (all meetings)</span>
-              <span class="bd-val">{{ fmtHD(meetingResults.reduce((a,m) => a + m.hdEndpoints, 0)) }} HD</span>
+              <span class="bd-val">{{ fmtHD(meetingResults.reduce((a,m) => a + m.hdEndpointsAll, 0)) }} HD</span>
             </div>
             <div class="breakdown-row" v-if="meetingResults.some(m => m.hdPresentation > 0)">
               <span class="bd-label">Presentation overhead</span>
-              <span class="bd-val bd-highlight">+{{ fmtHD(meetingResults.reduce((a,m) => a + m.hdPresentation, 0)) }} HD</span>
+              <span class="bd-val bd-highlight">+{{ fmtHD(meetingResults.reduce((a,m) => a + m.hdPresentationAll, 0)) }} HD</span>
             </div>
             <div class="breakdown-row" v-if="meetingResults.some(m => m.hdComposition > 0)">
               <span class="bd-label">Teams Adaptive Composition</span>
-              <span class="bd-val bd-highlight">+{{ fmtHD(meetingResults.reduce((a,m) => a + m.hdComposition, 0)) }} HD</span>
+              <span class="bd-val bd-highlight">+{{ fmtHD(meetingResults.reduce((a,m) => a + m.hdCompositionAll, 0)) }} HD</span>
             </div>
             <div class="breakdown-row" v-if="backplaneHD > 0">
               <span class="bd-label">Backplane (cross-location meetings)</span>
@@ -535,23 +551,24 @@
           <table class="data-table">
             <thead>
               <tr>
-                <th>Meeting</th>
-                <th class="num">Pts</th>
-                <th class="num">Ext.</th>
-                <th class="num">HD Total</th>
+                <th>Template</th>
+                <th class="num">Count</th>
+                <th class="num">Pts/mtg</th>
+                <th class="num">HD/mtg</th>
+                <th class="num">HD total</th>
                 <th>Flags</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="res in meetingResults" :key="res.id">
                 <td style="font-weight:600;font-size:12px">{{ res.name }}</td>
+                <td class="num">{{ res.count }}</td>
                 <td class="num">{{ res.totalPts }}</td>
-                <td class="num">
-                  <span class="ext-badge" v-if="res.extPts > 0">{{ res.extPts }}</span>
-                  <span v-else class="text-muted">—</span>
+                <td class="num" style="color:var(--pex-teal-dark)">
+                  {{ fmtHD(res.hdTotal) }}
                 </td>
                 <td class="num" style="font-weight:700;color:var(--pex-teal-dark)">
-                  {{ fmtHD(res.hdTotal) }}
+                  {{ fmtHD(res.hdTotalAll) }}
                 </td>
                 <td style="font-size:10px">
                   <span v-if="res.hasCrossLocation" class="interop-pill"
@@ -636,12 +653,12 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="res in meetingResults.filter(r => r.bwLan + r.bwWan > 0)" :key="res.id">
-                  <td style="font-size:12px;font-weight:600">{{ res.name }}</td>
-                  <td class="num" style="font-size:11px">{{ (res.bwLan / 1000).toFixed(2) }} Gbps</td>
+                <tr v-for="res in meetingResults.filter(r => r.bwLanAll + r.bwWanAll > 0)" :key="res.id">
+                  <td style="font-size:12px;font-weight:600">{{ res.name }} (×{{ res.count }})</td>
+                  <td class="num" style="font-size:11px">{{ (res.bwLanAll / 1000).toFixed(2) }} Gbps</td>
                   <td class="num" style="font-size:11px">
-                    <span :class="res.bwWan > 0 ? 'ext-badge' : ''">
-                      {{ (res.bwWan / 1000).toFixed(2) }} Gbps
+                    <span :class="res.bwWanAll > 0 ? 'ext-badge' : ''">
+                      {{ (res.bwWanAll / 1000).toFixed(2) }} Gbps
                     </span>
                   </td>
                 </tr>
