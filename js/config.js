@@ -31,6 +31,47 @@ window.PEXIP = {
     'audio-vp9':  64,
   },
 
+  // Maximum per-stream bandwidth by quality-codec key (for min–max range calculations)
+  // Reflects real-world ceiling before quality adaptation clamps the stream
+  BANDWIDTH_TABLE_MAX: {
+    '1080p-h264': 4000, '1080p-vp8': 4000, '1080p-vp9': 2800,
+    '720p-h264':  2000, '720p-vp8':  2000, '720p-vp9':  1400,
+    'sd-h264':    960,  'sd-vp8':    960,  'sd-vp9':    960,
+    'audio-h264': 64,   'audio-vp8': 64,   'audio-vp9': 64,
+  },
+
+  // Absolute per-participant bandwidth ceiling regardless of quality
+  PARTICIPANT_MAX_KBPS: 6000,
+
+  // Audio overhead per participant (kbps) — added on top of video
+  AUDIO_MIN_KBPS: 8,
+  AUDIO_MAX_KBPS: 64,
+
+  // Presentation stream bandwidth by endpoint type (kbps, per active presentation)
+  // Teams sends Full HD presentation; Google Meet is a separate capped call; others up to 75% of call BW
+  PRESENTATION_BW: {
+    teams:       { min: 2400, max: 2400 },
+    google_meet: { min: 960,  max: 2000 },
+    default:     { min: 960,  max: 2400 },
+  },
+
+  // Inter-node backplane stream counts per meeting layout
+  // hd = high-resolution streams crossing between nodes; thumb = thumbnail streams
+  LAYOUT_BACKPLANE: {
+    classic:  { hd: 1,  thumb: 0  },
+    '1+7':    { hd: 2,  thumb: 7  },
+    '4+0':    { hd: 4,  thumb: 0  },
+    '2+21':   { hd: 2,  thumb: 21 },
+    adaptive: { hd: 13, thumb: 0  },
+  },
+
+  // Backplane per-stream bandwidth range (kbps) — one entry per HD or thumbnail stream crossing nodes
+  BACKPLANE_HD_MIN_KBPS:       1600,
+  BACKPLANE_HD_MAX_KBPS:       4000,
+  BACKPLANE_THUMB_MIN_KBPS:    64,
+  BACKPLANE_THUMB_MAX_KBPS:    192,
+  BACKPLANE_PRESENTATION_KBPS: 1600,
+
   // Base HD connections per vCPU by instruction set (reference clock: 2.8 GHz)
   // Calibrated from Pexip NUMA docs: Xeon Gold 6342 (AVX-512, 2.8 GHz) ≈ 195 HD / 2 nodes / 16 vCPU each
   CPU_EFFICIENCY_TABLE: {

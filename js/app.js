@@ -14,9 +14,16 @@
   }
 
   function fmtKbps(kbps) {
-    if (kbps >= 1000000) return (kbps / 1000000).toFixed(2) + ' Tbps';
-    if (kbps >= 1000)    return (kbps / 1000).toFixed(2) + ' Gbps';
-    return Math.round(kbps) + ' Mbps';
+    if (kbps >= 1000000000) return (kbps / 1000000000).toFixed(2) + ' Tbps';
+    if (kbps >= 1000000)    return (kbps / 1000000).toFixed(2) + ' Gbps';
+    if (kbps >= 1000)       return (kbps / 1000).toFixed(2) + ' Mbps';
+    return Math.round(kbps) + ' kbps';
+  }
+
+  function fmtRange(min, max) {
+    if (!min && !max) return '0 kbps';
+    if (min === max)  return fmtKbps(min);
+    return fmtKbps(min) + ' – ' + fmtKbps(max);
   }
 
   // ── app ───────────────────────────────────────────────────────────────────
@@ -258,8 +265,9 @@
             participantEndpoints[tmpl.interopTarget] = (participantEndpoints[tmpl.interopTarget] || 0) + 1;
           }
 
-          // HD & bandwidth per endpoint type
-          let hdEndpoints = 0, hdPresentation = 0, bwLan = 0, bwWan = 0;
+          // HD & access bandwidth per endpoint type
+          let hdEndpoints = 0, hdPresentation = 0;
+          let bwAccessMin = 0, bwAccessMax = 0;
           const proxyFactor = viaProxy.value ? C.PROXY_RESOURCE_FACTOR : 1.0;
 
           endpointRows.forEach(row => {
@@ -280,12 +288,48 @@
               hdPresentation += typeCount * (def.presentationHD ?? 1.0);
             }
 
-            const bwKey       = row.quality + '-' + row.codec;
-            const bwFallback  = row.quality + '-h264';
-            const bwPerStream = C.BANDWIDTH_TABLE[bwKey] ?? C.BANDWIDTH_TABLE[bwFallback] ?? 0;
-            bwLan += typeIntCount * bwPerStream;
-            bwWan += typeExtCount * bwPerStream;
+            const bwKey      = row.quality + '-' + row.codec;
+            const bwFallback = row.quality + '-h264';
+            const bwMin      = C.BANDWIDTH_TABLE[bwKey]     ?? C.BANDWIDTH_TABLE[bwFallback]     ?? 0;
+            const bwMax      = Math.min(C.PARTICIPANT_MAX_KBPS,
+              C.BANDWIDTH_TABLE_MAX[bwKey] ?? C.BANDWIDTH_TABLE_MAX[bwFallback] ?? bwMin);
+            bwAccessMin += typeCount * bwMin;
+            bwAccessMax += typeCount * bwMax;
           });
+
+          // Audio overhead per participant
+          const bwAudioMin = totalPts * C.AUDIO_MIN_KBPS;
+          const bwAudioMax = totalPts * C.AUDIO_MAX_KBPS;
+
+          // Presentation stream bandwidth (single stream added when presentation is active)
+          let bwPresentationMin = 0, bwPresentationMax = 0;
+          if (tmpl.presentationActive && totalPts > 0) {
+            const pBw = C.PRESENTATION_BW[tmpl.endpointType] ?? C.PRESENTATION_BW.default;
+            bwPresentationMin = pBw.min;
+            bwPresentationMax = pBw.max;
+          }
+
+          // Inter-node backplane bandwidth — layout-aware, cross-location meetings only
+          let bwBackplaneMin = 0, bwBackplaneMax = 0;
+          if (hasCrossLocation && totalDefinedTranscodingNodes.value > 1) {
+            const lp = C.LAYOUT_BACKPLANE[tmpl.layout] ?? C.LAYOUT_BACKPLANE.classic;
+            bwBackplaneMin = lp.hd * C.BACKPLANE_HD_MIN_KBPS + lp.thumb * C.BACKPLANE_THUMB_MIN_KBPS;
+            bwBackplaneMax = lp.hd * C.BACKPLANE_HD_MAX_KBPS + lp.thumb * C.BACKPLANE_THUMB_MAX_KBPS;
+            if (tmpl.presentationActive) {
+              bwBackplaneMin += C.BACKPLANE_PRESENTATION_KBPS;
+              bwBackplaneMax += C.BACKPLANE_PRESENTATION_KBPS;
+            }
+          }
+
+          // Proxy-forwarded bandwidth: external participant media traverses proxy → transcoding
+          const bwProxyMin = (viaProxy.value && extPts > 0)
+            ? Math.round(bwAccessMin * extProportion) : 0;
+          const bwProxyMax = (viaProxy.value && extPts > 0)
+            ? Math.round(bwAccessMax * extProportion) : 0;
+
+          // Meeting bandwidth total (access + audio + presentation per meeting × count)
+          const bwMeetingMin = bwAccessMin + bwAudioMin + bwPresentationMin;
+          const bwMeetingMax = bwAccessMax + bwAudioMax + bwPresentationMax;
 
           // Teams Adaptive Composition per meeting (layout-driven)
           let hdComposition = 0;
@@ -300,6 +344,8 @@
 
           return {
             id: tmpl.id,
+            locationId: tmpl.locationId,
+            layout: tmpl.layout,
             // Display name: "Location / Endpoint Type"
             name: (loc?.name || 'Unknown') + ' / ' + (C.ENDPOINT_TYPES[tmpl.endpointType]?.label ?? tmpl.endpointType),
             locationName: loc?.name || 'Unknown',
@@ -311,17 +357,27 @@
             hdPresentation,
             hdComposition,
             hdTotal,
-            // Aggregate (per-meeting × count) variants for totals
+            // Aggregate (per-meeting × count) variants for HD totals
             hdTotalAll: hdTotal * effectiveCount,
             hdEndpointsAll: hdEndpoints * effectiveCount,
             hdPresentationAll: hdPresentation * effectiveCount,
             hdCompositionAll: hdComposition * effectiveCount,
             hasCrossLocation,
             crossLocationCount,
-            bwLan,
-            bwWan,
-            bwLanAll: bwLan * effectiveCount,
-            bwWanAll: bwWan * effectiveCount,
+            // Bandwidth — per-meeting single-instance values
+            bwAccessMin, bwAccessMax,
+            bwAudioMin, bwAudioMax,
+            bwPresentationMin, bwPresentationMax,
+            bwBackplaneMin, bwBackplaneMax,
+            bwProxyMin, bwProxyMax,
+            bwMeetingMin, bwMeetingMax,
+            // Bandwidth — aggregate (× effectiveCount)
+            bwMeetingMinAll:   bwMeetingMin   * effectiveCount,
+            bwMeetingMaxAll:   bwMeetingMax   * effectiveCount,
+            bwBackplaneMinAll: bwBackplaneMin * effectiveCount,
+            bwBackplaneMaxAll: bwBackplaneMax * effectiveCount,
+            bwProxyMinAll:     bwProxyMin     * effectiveCount,
+            bwProxyMaxAll:     bwProxyMax     * effectiveCount,
           };
         })
       );
@@ -331,7 +387,6 @@
       const totalParticipants = computed(() => meetingResults.value.reduce((a, r) => a + r.totalPts * r.count, 0));
       const totalExternalPts  = computed(() => meetingResults.value.reduce((a, r) => a + r.extPts * r.count, 0));
       const totalInternalPts  = computed(() => totalParticipants.value - totalExternalPts.value);
-      const wanBandwidthKbps  = computed(() => meetingResults.value.reduce((a, r) => a + r.bwWanAll, 0));
 
       // ── step 3: total HD before backplane ─────────────────────────────────
       const totalHDBeforeBackplane = computed(() =>
@@ -372,15 +427,45 @@
       );
 
       // ── step 8: bandwidth ─────────────────────────────────────────────────
-      const totalBandwidthKbps = computed(() =>
-        meetingResults.value.reduce((a, r) => a + r.bwLanAll + r.bwWanAll, 0)
+      const meetingBandwidthMin = computed(() =>
+        meetingResults.value.reduce((a, r) => a + r.bwMeetingMinAll, 0)
       );
-      const interNodeBandwidthKbps = computed(() => {
-        if (totalDefinedTranscodingNodes.value <= 1) return 0;
-        return meetingResults.value
-          .filter(r => r.hasCrossLocation)
-          .reduce((a, r) => a + Math.max(1, r.crossLocationCount) * 960 * r.count, 0);
-      });
+      const meetingBandwidthMax = computed(() =>
+        meetingResults.value.reduce((a, r) => a + r.bwMeetingMaxAll, 0)
+      );
+      const backplaneBandwidthMin = computed(() =>
+        meetingResults.value.reduce((a, r) => a + r.bwBackplaneMinAll, 0)
+      );
+      const backplaneBandwidthMax = computed(() =>
+        meetingResults.value.reduce((a, r) => a + r.bwBackplaneMaxAll, 0)
+      );
+      const proxyBandwidthMin = computed(() =>
+        meetingResults.value.reduce((a, r) => a + r.bwProxyMinAll, 0)
+      );
+      const proxyBandwidthMax = computed(() =>
+        meetingResults.value.reduce((a, r) => a + r.bwProxyMaxAll, 0)
+      );
+      const perLocationBandwidth = computed(() =>
+        locations
+          .map(loc => {
+            const ms = meetingResults.value.filter(r => r.locationId === loc.id);
+            return {
+              id:       loc.id,
+              name:     loc.name || 'Unnamed',
+              localMin: ms.reduce((a, r) => a + r.bwMeetingMinAll,   0),
+              localMax: ms.reduce((a, r) => a + r.bwMeetingMaxAll,   0),
+              wanMin:   ms.reduce((a, r) => a + r.bwBackplaneMinAll, 0),
+              wanMax:   ms.reduce((a, r) => a + r.bwBackplaneMaxAll, 0),
+            };
+          })
+          .filter(l => l.localMin > 0 || l.wanMin > 0)
+      );
+      const totalBandwidthMin = computed(() =>
+        meetingBandwidthMin.value + backplaneBandwidthMin.value + proxyBandwidthMin.value
+      );
+      const totalBandwidthMax = computed(() =>
+        meetingBandwidthMax.value + backplaneBandwidthMax.value + proxyBandwidthMax.value
+      );
 
       // ── warnings ──────────────────────────────────────────────────────────
       const warnings = computed(() => {
@@ -528,9 +613,15 @@
         vCPURequired,
         transcodingNodeCount,
         proxyNodeCount,
-        totalBandwidthKbps,
-        wanBandwidthKbps,
-        interNodeBandwidthKbps,
+        meetingBandwidthMin,
+        meetingBandwidthMax,
+        backplaneBandwidthMin,
+        backplaneBandwidthMax,
+        proxyBandwidthMin,
+        proxyBandwidthMax,
+        perLocationBandwidth,
+        totalBandwidthMin,
+        totalBandwidthMax,
         warnings,
         nodeRecommendations,
 
@@ -567,6 +658,7 @@
         // formatters
         fmtHD,
         fmtKbps,
+        fmtRange,
       };
     },
   }).mount('#app');

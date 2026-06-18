@@ -12,7 +12,7 @@ Architects and customers use this tool to answer:
 
 - How many transcoding nodes do I need for my endpoint mix?
 - What vCPU count is required given my CPU model and hypervisor?
-- How much bandwidth will peak concurrent calls consume — split by LAN and WAN?
+- What is the minimum and maximum bandwidth requirement across all meetings, broken out by meeting access, inter-node backplane, and proxy forwarding?
 - Do I need proxy/edge nodes, and how many?
 - What is the per-meeting Teams Adaptive Composition overhead?
 
@@ -23,7 +23,7 @@ The workflow mirrors how Pexip resources are actually consumed:
 3. **Configure meetings** (③ Meeting Builder) — meeting templates are **auto-generated** from the topology. For every `(location, endpoint type)` combination with assigned endpoints, one template card is created. Each template specifies: participant count and distribution by location (including external), interop target, layout, and presentation. Set the meeting count per template — capped at the endpoint capacity assigned to that location. All resource calculations are driven by these templates.
 4. **Configure hardware** (④ Hardware Configuration) — select CPU instruction set, clock speed, hypervisor, and node vCPU size.
 
-The output is a per-location node recommendation table, total vCPU count, per-template HD breakdown, and full LAN/WAN bandwidth estimate.
+The output is a per-location node recommendation table, total vCPU count, per-template HD breakdown, and a five-section network bandwidth model showing minimum and maximum requirements for meeting access, inter-node backplane, proxy forwarding, per-location totals, and deployment-wide totals.
 
 ---
 
@@ -36,7 +36,7 @@ The calculation model is grounded in Pexip's published capacity planning methodo
 - **VP9 resource trade-off** — VP9 reduces bandwidth by ~33% compared to H.264 at the same resolution, but increases node CPU load by 25% (`VP9_RESOURCE_FACTOR = 1.25`).
 - **Teams Adaptive Composition** — When Teams participants are in a meeting using Adaptive/Teams-like layout, an additional HD reservation is made per conference: +1.0 HD for up to 3 on-stage participants, plus +0.5 HD per on-stage participant beyond 3.
 - **Template-driven resources** — Resources are consumed only during active conferences. Meeting templates are auto-generated from topology × endpoint assignment. Each template's per-meeting HD/BW cost is computed once and multiplied by the template's meeting count to produce aggregate totals.
-- **Backplane overhead** — Meetings whose participants span multiple topology locations incur inter-node signalling cost: +1 HD per cross-location link per meeting, multiplied by meeting count. Detected per template from participant location inputs.
+- **Layout-aware backplane overhead** — Meetings whose participants span multiple topology locations incur inter-node bandwidth cost. The number of HD and thumbnail streams crossing nodes is driven by the selected layout: Classic (1 HD), 1+7 (2 HD + 7 thumbnails), 4+0 (4 HD), 2+21 (2 HD + 21 thumbnails), Adaptive/Teams-like (13 HD). Each HD stream costs 1.6–4 Mbps; each thumbnail costs 64–192 kbps. An active presentation adds a further 1.6 Mbps to backplane traffic.
 - **Proxy doubling (external participants only)** — External participants (those with no assigned topology location) route via proxy/edge nodes. When proxy or external nodes exist in the topology, their HD contribution is doubled. Internal participants are never doubled. The external proportion within each template is used to split the proxy factor across endpoint types.
 - **Endpoint-aware meeting limits** — A template's meeting count cannot exceed the number of endpoints of that type assigned to that location. E.g. 100 Zoom endpoints assigned to East → at most 100 `[East / Zoom]` meetings.
 - **Presentation overhead** — Toggled per meeting template. Adds per-participant HD overhead for endpoint types that support dual-stream: WebRTC +1.0 HD/pt, Teams +0.5 HD/pt, Google Meet +1.0 HD/pt, Skype for Business +1.0 HD/pt.
@@ -173,15 +173,97 @@ hdTotal        = 19.5 + 5.0 + 4.5 = 29.0 HD  (per meeting)
 hdTotalAll     = 29.0 × 50 = 1,450 HD  (aggregate for this template)
 ```
 
-**2g — Bandwidth per meeting:**
-```
-bwPerStream  = BANDWIDTH_TABLE[quality + '-' + codec]
-bwLan        = typeIntCount × bwPerStream   (internal participants)
-bwWan        = typeExtCount × bwPerStream   (external participants via proxy)
+**2g — Bandwidth per meeting (min / max range):**
 
-bwLanAll     = bwLan × effectiveCount
-bwWanAll     = bwWan × effectiveCount
+Access bandwidth is computed as a min–max range. The minimum uses the standard bitrate from `BANDWIDTH_TABLE`; the maximum uses `BANDWIDTH_TABLE_MAX`, capped at `PARTICIPANT_MAX_KBPS = 6000 kbps` per participant.
+
 ```
+bwKey     = quality + '-' + codec
+bwMin     = BANDWIDTH_TABLE[bwKey]
+bwMax     = min(PARTICIPANT_MAX_KBPS, BANDWIDTH_TABLE_MAX[bwKey])
+
+bwAccessMin += typeCount × bwMin   (summed across all endpoint types in meeting)
+bwAccessMax += typeCount × bwMax
+
+bwAudioMin  = totalPts × AUDIO_MIN_KBPS    (8 kbps/participant)
+bwAudioMax  = totalPts × AUDIO_MAX_KBPS    (64 kbps/participant)
+```
+
+**Presentation stream (if `presentationActive` and participants > 0):**
+```
+pBw              = PRESENTATION_BW[endpointType] ?? PRESENTATION_BW.default
+bwPresentationMin = pBw.min
+bwPresentationMax = pBw.max
+```
+
+| Endpoint type | Presentation min | Presentation max | Notes |
+|---|---|---|---|
+| Teams | 2,400 kbps | 2,400 kbps | Always Full HD; fixed |
+| Google Meet | 960 kbps | 2,000 kbps | Separate call stream; capped |
+| All others | 960 kbps | 2,400 kbps | Up to 75% of call bandwidth |
+
+**Inter-node backplane bandwidth (cross-location meetings only):**
+
+Stream counts per layout drive the backplane range. Only applied when `hasCrossLocation && transcodingNodes > 1`.
+
+```
+lp = LAYOUT_BACKPLANE[layout]
+bwBackplaneMin = lp.hd × BACKPLANE_HD_MIN_KBPS + lp.thumb × BACKPLANE_THUMB_MIN_KBPS
+bwBackplaneMax = lp.hd × BACKPLANE_HD_MAX_KBPS + lp.thumb × BACKPLANE_THUMB_MAX_KBPS
+
+if presentationActive:
+  bwBackplaneMin += BACKPLANE_PRESENTATION_KBPS   (1,600 kbps)
+  bwBackplaneMax += BACKPLANE_PRESENTATION_KBPS
+```
+
+| Layout | HD streams | Thumbnail streams | Backplane min | Backplane max |
+|---|---|---|---|---|
+| Classic | 1 | 0 | 1,600 kbps | 4,000 kbps |
+| 1+7 | 2 | 7 | 3,648 kbps | 9,344 kbps |
+| 4+0 | 4 | 0 | 6,400 kbps | 16,000 kbps |
+| 2+21 | 2 | 21 | 4,544 kbps | 12,032 kbps |
+| Adaptive / Teams | 13 | 0 | 20,800 kbps | 52,000 kbps |
+
+Constants: `BACKPLANE_HD_MIN/MAX_KBPS = 1600/4000`; `BACKPLANE_THUMB_MIN/MAX_KBPS = 64/192`.
+
+**Proxy-forwarded bandwidth (external participants + proxy nodes defined):**
+```
+bwProxyMin = round(bwAccessMin × extProportion)   if viaProxy and extPts > 0
+bwProxyMax = round(bwAccessMax × extProportion)
+```
+
+**Per-meeting total:**
+```
+bwMeetingMin = bwAccessMin + bwAudioMin + bwPresentationMin
+bwMeetingMax = bwAccessMax + bwAudioMax + bwPresentationMax
+
+bwMeetingMinAll   = bwMeetingMin   × effectiveCount
+bwMeetingMaxAll   = bwMeetingMax   × effectiveCount
+bwBackplaneMinAll = bwBackplaneMin × effectiveCount
+bwBackplaneMaxAll = bwBackplaneMax × effectiveCount
+bwProxyMinAll     = bwProxyMin     × effectiveCount
+bwProxyMaxAll     = bwProxyMax     × effectiveCount
+```
+
+**Bandwidth lookup tables (kbps per stream, video only):**
+
+Minimum (`BANDWIDTH_TABLE`):
+
+| Resolution | H.264 | VP8 | VP9 |
+|---|---|---|---|
+| 1080p | 2,400 | 2,400 | 1,600 |
+| 720p | 960 | 960 | 640 |
+| SD | 448 | 448 | 448 |
+| Audio | 64 | 64 | 64 |
+
+Maximum (`BANDWIDTH_TABLE_MAX`):
+
+| Resolution | H.264 | VP8 | VP9 |
+|---|---|---|---|
+| 1080p | 4,000 | 4,000 | 2,800 |
+| 720p | 2,000 | 2,000 | 1,400 |
+| SD | 960 | 960 | 960 |
+| Audio | 64 | 64 | 64 |
 
 ---
 
@@ -294,43 +376,48 @@ Each transcoding location gets its own row in the recommendations table.
 
 ---
 
-### Step 8 — Bandwidth calculation
+### Step 8 — Bandwidth aggregation
 
-Bandwidth is computed per template from the internal/external participant split, then multiplied by effective meeting count.
+Per-template bandwidth components from Step 2g are summed into five outputs that map directly to the five sections of the Network Bandwidth panel.
 
-**Per template, per endpoint type T:**
+**① Meeting bandwidth (participant access + audio + presentation):**
 ```
-bwKey        = quality + '-' + codec     (e.g. '720p-h264', '720p-vp9')
-bwPerStream  = BANDWIDTH_TABLE[bwKey]    (fallback: quality + '-h264')
-bwLan        = typeIntCount × bwPerStream
-bwWan        = typeExtCount × bwPerStream
-
-bwLanAll     = bwLan × effectiveCount
-bwWanAll     = bwWan × effectiveCount
+meetingBandwidthMin = sum(bwMeetingMinAll  for all templates)
+meetingBandwidthMax = sum(bwMeetingMaxAll  for all templates)
 ```
 
-**Bandwidth lookup table (kbps per stream, video only):**
-
-| Resolution | H.264 | VP8   | VP9   |
-|------------|-------|-------|-------|
-| 1080p      | 2,400 | 2,400 | 1,600 |
-| 720p       | 960   | 960   | 640   |
-| SD         | 448   | 448   | 448   |
-| Audio      | 64    | 64    | 64    |
-
-VP8 uses H.264-equivalent bandwidth (similar bitrate at same resolution).
-
-**Totals:**
+**② Inter-node / backplane WAN:**
 ```
-totalBandwidthKbps = sum(bwLanAll + bwWanAll  for all templates, all types)
-wanBandwidthKbps   = sum(bwWanAll              for all templates, all types)
+backplaneBandwidthMin = sum(bwBackplaneMinAll  for all templates)
+backplaneBandwidthMax = sum(bwBackplaneMaxAll  for all templates)
+```
+Only templates where `hasCrossLocation && transcodingNodes > 1` contribute non-zero values.
+
+**③ Proxy / edge forwarded bandwidth:**
+```
+proxyBandwidthMin = sum(bwProxyMinAll  for all templates)
+proxyBandwidthMax = sum(bwProxyMaxAll  for all templates)
+```
+Only applies when proxy or external nodes exist in the topology (`viaProxy = true`) and the template has external participants.
+
+**④ Per-location totals:**
+
+For each topology location, meetings hosted at that location are aggregated:
+```
+localMin = sum(bwMeetingMinAll    for meetings where locationId === loc.id)
+localMax = sum(bwMeetingMaxAll    for meetings where locationId === loc.id)
+wanMin   = sum(bwBackplaneMinAll  for meetings where locationId === loc.id)
+wanMax   = sum(bwBackplaneMaxAll  for meetings where locationId === loc.id)
+```
+Locations with no hosted meetings are excluded from the table.
+
+**⑤ Deployment-wide totals:**
+```
+totalBandwidthMin = meetingBandwidthMin + backplaneBandwidthMin + proxyBandwidthMin
+totalBandwidthMax = meetingBandwidthMax + backplaneBandwidthMax + proxyBandwidthMax
 ```
 
-**Inter-node backplane bandwidth** (only for cross-location templates):
-```
-interNodeBandwidthKbps = sum over cross-location templates:
-                           max(1, crossLocationCount) × 960 kbps × effectiveCount
-```
+These are the figures shown in the summary bar as a min–max range.
 
 ---
 
@@ -433,9 +520,14 @@ The pipeline runs inside `setup()` in [js/app.js](js/app.js) as a chain of Vue `
 
 ```
 rowResults → meetingResults (per template × count)
-→ totalHDBeforeBackplane → backplaneHD
-→ totalHDRaw → totalHDWithHeadroom → effectiveHDperVcpu
-→ vCPURequired → transcodingNodeCount
+  ├─ HD path:        totalHDBeforeBackplane → backplaneHD → totalHDRaw
+  │                  → totalHDWithHeadroom → effectiveHDperVcpu
+  │                  → vCPURequired → transcodingNodeCount
+  └─ Bandwidth path: meetingBandwidthMin/Max
+                     backplaneBandwidthMin/Max   (layout-aware, cross-location)
+                     proxyBandwidthMin/Max        (external participants only)
+                     perLocationBandwidth         (aggregated per host location)
+                     totalBandwidthMin/Max        (deployment-wide)
 ```
 
 When inserting a new step, update all downstream `computed()` references to use the new intermediate value and verify the chain with a hand-calculated example.
