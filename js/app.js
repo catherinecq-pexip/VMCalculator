@@ -34,12 +34,12 @@
       // ── endpoint & interop model ──────────────────────────────────────────
       // count = total defined endpoints of this type (internal to the deployment)
       const endpointRows = reactive([
-        { type: 'sip_h323',           count: 0, quality: '720p', codec: 'h264' },
-        { type: 'zoom',               count: 0, quality: '720p', codec: 'h264' },
-        { type: 'webrtc',             count: 0, quality: '720p', codec: 'vp8'  },
-        { type: 'teams',              count: 0, quality: '720p', codec: 'h264' },
-        { type: 'google_meet',        count: 0, quality: '720p', codec: 'vp8'  },
-        { type: 'skype_for_business', count: 0, quality: '720p', codec: 'h264' },
+        { type: 'sip_h323',           count: 0, quality: '1080p', codec: 'h264' },
+        { type: 'zoom',               count: 0, quality: '1080p', codec: 'h264' },
+        { type: 'webrtc',             count: 0, quality: '1080p', codec: 'vp8'  },
+        { type: 'teams',              count: 0, quality: '1080p', codec: 'h264' },
+        { type: 'google_meet',        count: 0, quality: '1080p', codec: 'vp8'  },
+        { type: 'skype_for_business', count: 0, quality: '1080p', codec: 'h264' },
       ]);
 
       // ── topology — deployment topology builder ────────────────────────────
