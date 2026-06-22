@@ -34,12 +34,12 @@
       // ── endpoint & interop model ──────────────────────────────────────────
       // count = total defined endpoints of this type (internal to the deployment)
       const endpointRows = reactive([
-        { type: 'sip_h323',           count: 0, quality: '720p', codec: 'h264', presentationOn: false },
-        { type: 'zoom',               count: 0, quality: '720p', codec: 'h264', presentationOn: false },
-        { type: 'webrtc',             count: 0, quality: '720p', codec: 'vp8',  presentationOn: false },
-        { type: 'teams',              count: 0, quality: '720p', codec: 'h264', presentationOn: false },
-        { type: 'google_meet',        count: 0, quality: '720p', codec: 'vp8',  presentationOn: false },
-        { type: 'skype_for_business', count: 0, quality: '720p', codec: 'h264', presentationOn: false },
+        { type: 'sip_h323',           count: 0, quality: '720p', codec: 'h264' },
+        { type: 'zoom',               count: 0, quality: '720p', codec: 'h264' },
+        { type: 'webrtc',             count: 0, quality: '720p', codec: 'vp8'  },
+        { type: 'teams',              count: 0, quality: '720p', codec: 'h264' },
+        { type: 'google_meet',        count: 0, quality: '720p', codec: 'vp8'  },
+        { type: 'skype_for_business', count: 0, quality: '720p', codec: 'h264' },
       ]);
 
       // ── topology — deployment topology builder ────────────────────────────
@@ -90,7 +90,6 @@
       const totalDefinedExternalNodes    = computed(() => allNodes.value.filter(n => n.role === 'external').length);
       const transcodingLocations         = computed(() => locations.filter(l => l.nodes.some(n => n.role === 'transcoding')));
       const numberOfTranscodingLocations = computed(() => transcodingLocations.value.length);
-      const numberOfSites                = computed(() => Math.max(1, numberOfTranscodingLocations.value));
       const viaProxy                     = computed(() => totalDefinedProxyNodes.value > 0 || totalDefinedExternalNodes.value > 0);
 
       const topologyMode = computed(() => {
@@ -224,11 +223,6 @@
         endpointRows.some(r => (Number(r.count)) > 0
           && ['teams', 'google_meet', 'skype_for_business'].includes(r.type))
       );
-      const hasTeams = computed(() => {
-        const r = endpointRows.find(e => e.type === 'teams');
-        return !!(r && Number(r.count) > 0);
-      });
-
       // ── per-template resource calculation ─────────────────────────────────
       // Each template represents N identical meetings; we compute per-meeting HD/BW
       // once and multiply by the effective count for aggregate totals.
@@ -347,12 +341,13 @@
           const bwMeetingMin = bwAccessMin + bwAudioMin + bwPresentationMin;
           const bwMeetingMax = bwAccessMax + bwAudioMax + bwPresentationMax;
 
-          // Teams Adaptive Composition per meeting (layout-driven)
+          // Adaptive Composition overhead per meeting (layout-driven).
+          // Applies to all participants visible in the adaptive layout, not just Teams connections.
           let hdComposition = 0;
-          const teamsInMeeting = Number(participantEndpoints.teams) || 0;
-          if (tmpl.layout === 'adaptive' && teamsInMeeting > 0) {
+          const videoVisiblePts = maxVideoPts !== null ? Math.min(totalPts, maxVideoPts) : totalPts;
+          if (tmpl.layout === 'adaptive' && videoVisiblePts > 0) {
             hdComposition = C.TEAMS_COMPOSITION_HD_BASE
-              + Math.max(0, teamsInMeeting - 3) * C.TEAMS_COMPOSITION_HD_ONSTAGE;
+              + Math.max(0, videoVisiblePts - 3) * C.TEAMS_COMPOSITION_HD_ONSTAGE;
           }
 
           const hdTotal = hdEndpoints + hdPresentation + hdComposition;
@@ -616,7 +611,6 @@
         // computed — endpoint ref data
         rowResults,
         hasInterop,
-        hasTeams,
 
         // computed — meeting totals
         numberOfMeetings,
@@ -645,7 +639,6 @@
         nodeRecommendations,
 
         // computed — topology
-        numberOfSites,
         viaProxy,
         totalDefinedTranscodingNodes,
         totalDefinedProxyNodes,
@@ -667,8 +660,6 @@
         ENDPOINT_TYPES:           C.ENDPOINT_TYPES,
         ENDPOINT_CODEC:           C.ENDPOINT_CODEC,
         ENDPOINT_QUALITY_OPTIONS: C.ENDPOINT_QUALITY_OPTIONS,
-        TEAMS_COMPOSITION_HD_BASE:    C.TEAMS_COMPOSITION_HD_BASE,
-        TEAMS_COMPOSITION_HD_ONSTAGE: C.TEAMS_COMPOSITION_HD_ONSTAGE,
         NODE_SIZES:               C.NODE_SIZES,
         NODE_ROLES:               C.NODE_ROLES,
         QUALITY_LABELS:           C.QUALITY_LABELS,

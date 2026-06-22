@@ -171,33 +171,23 @@ window.PEXIP = {
   // Backplane HD reservation per active meeting per transcoding node
   BACKPLANE_HD_PER_MEETING: 1.0,
 
-  // Gateway overhead multipliers applied to base HD
-  GATEWAY_OVERHEAD: {
-    none:  1.0,
-    light: 1.5,
-    heavy: 1.75,
-  },
-
   // Endpoint type definitions
   ENDPOINT_TYPES: {
     sip_h323: {
       label:             'SIP / H.323',
       connectionFactor:  1.0,
       presentationExtra: false,
-      gatewayLegs:       1,
     },
     webrtc: {
       label:             'WebRTC',
       connectionFactor:  1.0,
       presentationExtra: true,
       presentationHD:    1.0,
-      gatewayLegs:       1,
     },
     zoom: {
       label:             'Zoom',
       connectionFactor:  1.0,
       presentationExtra: false,
-      gatewayLegs:       1,
     },
     teams: {
       label:             'Microsoft Teams',
@@ -205,21 +195,18 @@ window.PEXIP = {
       minConnectionHD:   1.5,  // Pexip: Teams leg is 1.5 HD at SD *and* HD quality — no quality discount below 1.5
       presentationExtra: true,
       presentationHD:    0.5,
-      gatewayLegs:       2,
     },
     google_meet: {
       label:             'Google Meet',
       connectionFactor:  1.0,
       presentationExtra: true,
       presentationHD:    1.0,
-      gatewayLegs:       2,
     },
     skype_for_business: {
       label:             'Skype for Business',
       connectionFactor:  1.0,
       presentationExtra: true,
       presentationHD:    1.0,
-      gatewayLegs:       1,
     },
   },
 
@@ -243,12 +230,6 @@ window.PEXIP = {
   // Teams Adaptive Composition overhead (per conference)
   TEAMS_COMPOSITION_HD_BASE:    1.0,  // HD reserved per conference (≤3 on-stage)
   TEAMS_COMPOSITION_HD_ONSTAGE: 0.5,  // additional HD per on-stage participant beyond 3
-
-  TOPOLOGY: {
-    single_node:  'single_node',
-    single_site:  'single_site',
-    multi_site:   'multi_site',
-  },
 
   NODE_ROLES: {
     transcoding: 'Transcoding (Internal)',
