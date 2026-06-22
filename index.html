@@ -221,7 +221,7 @@
             <strong>Routing rules:</strong>
             Calls within the same location use local transcoding.
             Calls spanning locations incur backplane overhead.
-            Proxy and External nodes double resource accounting for external participants.
+            Proxy and External nodes forward media to transcoding nodes — external participants consume the same transcoding HD as internal ones; proxy bandwidth is tracked separately.
           </div>
         </div>
       </div>
@@ -327,11 +327,23 @@
 
                   <label class="field-label" style="margin-top:10px">Layout</label>
                   <select v-model="tmpl.layout" @click.stop>
-                    <option value="classic">Classic layout</option>
-                    <option value="adaptive">Adaptive / Teams-like</option>
-                    <option value="1+7">1+7 Layout</option>
-                    <option value="4+0">4+0 Layout</option>
-                    <option value="2+21">2+21 Layout</option>
+                    <optgroup label="Adaptive / Teams-like">
+                      <option value="adaptive">Adaptive Composition (max 12 video)</option>
+                    </optgroup>
+                    <optgroup label="Speaker-Focused">
+                      <option value="1+0">1+0 — Full-screen speaker (max 1)</option>
+                      <option value="1+1">1+1 (max 2)</option>
+                      <option value="1+7">1+7 (max 8)</option>
+                      <option value="1+21">1+21 (max 22)</option>
+                      <option value="2+21">2+21 (max 23)</option>
+                      <option value="1+33">1+33 (max 34)</option>
+                    </optgroup>
+                    <optgroup label="Equal Grid">
+                      <option value="2x2">2×2 grid (max 4)</option>
+                      <option value="3x3">3×3 grid (max 9)</option>
+                      <option value="4x4">4×4 grid (max 16)</option>
+                      <option value="5x5">5×5 grid (max 25)</option>
+                    </optgroup>
                   </select>
                 </div>
 
@@ -360,6 +372,11 @@
                   <span v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdComposition ?? 0) > 0"
                         class="interop-pill">
                     Adaptive comp +{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdComposition ?? 0) }} HD
+                  </span>
+                  <span v-if="(meetingResults.find(r => r.id === tmpl.id)?.audioOverflowPts ?? 0) > 0"
+                        class="interop-pill"
+                        style="background:var(--warn-amber-bg);color:var(--warn-amber)">
+                    {{ meetingResults.find(r => r.id === tmpl.id)?.audioOverflowPts }} over layout limit → audio-only
                   </span>
                 </template>
                 <span v-else class="text-muted" style="font-size:11px;font-style:italic">
@@ -582,8 +599,12 @@
                     adapt
                   </span>
                   <span v-if="res.extPts > 0 && viaProxy" class="interop-pill"
-                        style="background:var(--pex-purple-light);color:var(--pex-purple)">
+                        style="background:var(--pex-purple-light);color:var(--pex-purple);margin-right:3px">
                     proxy
+                  </span>
+                  <span v-if="res.audioOverflowPts > 0" class="interop-pill"
+                        style="background:var(--warn-amber-bg);color:var(--warn-amber)">
+                    +{{ res.audioOverflowPts }} audio
                   </span>
                 </td>
               </tr>

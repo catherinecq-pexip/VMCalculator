@@ -55,14 +55,80 @@ window.PEXIP = {
     default:     { min: 960,  max: 2400 },
   },
 
-  // Inter-node backplane stream counts per meeting layout
-  // hd = high-resolution streams crossing between nodes; thumb = thumbnail streams
-  LAYOUT_BACKPLANE: {
-    classic:  { hd: 1,  thumb: 0  },
-    '1+7':    { hd: 2,  thumb: 7  },
-    '4+0':    { hd: 4,  thumb: 0  },
-    '2+21':   { hd: 2,  thumb: 21 },
-    adaptive: { hd: 13, thumb: 0  },
+  // Layout definitions — per-layout visible participant limit and inter-node backplane stream counts.
+  // maxVideoParticipants: participants beyond this are treated as audio-only for HD resource calculation.
+  // backplane.hd:    number of HD-quality streams crossing between transcoding nodes for this layout.
+  // backplane.thumb: number of thumbnail streams (64–192 kbps) crossing between nodes.
+  LAYOUTS: {
+    // ── A. Adaptive / Teams-like ─────────────────────────────────────────────
+    adaptive: {
+      label:                'Adaptive Composition',
+      group:                'adaptive',
+      maxVideoParticipants: 12,
+      backplane:            { hd: 13, thumb: 0 },
+    },
+    // ── B. Speaker-Focused (Classic) ─────────────────────────────────────────
+    '1+0': {
+      label:                '1+0 — Full-screen speaker',
+      group:                'speaker',
+      maxVideoParticipants: 1,
+      backplane:            { hd: 1, thumb: 0 },
+    },
+    '1+1': {
+      label:                '1+1',
+      group:                'speaker',
+      maxVideoParticipants: 2,
+      backplane:            { hd: 2, thumb: 0 },
+    },
+    '1+7': {
+      label:                '1+7',
+      group:                'speaker',
+      maxVideoParticipants: 8,
+      backplane:            { hd: 2, thumb: 7 },
+    },
+    '1+21': {
+      label:                '1+21',
+      group:                'speaker',
+      maxVideoParticipants: 22,
+      backplane:            { hd: 2, thumb: 21 },
+    },
+    '2+21': {
+      label:                '2+21',
+      group:                'speaker',
+      maxVideoParticipants: 23,
+      backplane:            { hd: 2, thumb: 21 },
+    },
+    '1+33': {
+      label:                '1+33',
+      group:                'speaker',
+      maxVideoParticipants: 34,
+      backplane:            { hd: 2, thumb: 33 },
+    },
+    // ── C. Equal Grid ────────────────────────────────────────────────────────
+    '2x2': {
+      label:                '2×2 grid',
+      group:                'grid',
+      maxVideoParticipants: 4,
+      backplane:            { hd: 4, thumb: 0 },
+    },
+    '3x3': {
+      label:                '3×3 grid',
+      group:                'grid',
+      maxVideoParticipants: 9,
+      backplane:            { hd: 9, thumb: 0 },
+    },
+    '4x4': {
+      label:                '4×4 grid',
+      group:                'grid',
+      maxVideoParticipants: 16,
+      backplane:            { hd: 16, thumb: 0 },
+    },
+    '5x5': {
+      label:                '5×5 grid',
+      group:                'grid',
+      maxVideoParticipants: 25,
+      backplane:            { hd: 25, thumb: 0 },
+    },
   },
 
   // Backplane per-stream bandwidth range (kbps) — one entry per HD or thumbnail stream crossing nodes
@@ -112,9 +178,6 @@ window.PEXIP = {
     heavy: 1.75,
   },
 
-  // Proxy doubles resource usage (traffic hits both proxy AND transcoding node)
-  PROXY_RESOURCE_FACTOR: 2.0,
-
   // Endpoint type definitions
   ENDPOINT_TYPES: {
     sip_h323: {
@@ -139,6 +202,7 @@ window.PEXIP = {
     teams: {
       label:             'Microsoft Teams',
       connectionFactor:  1.5,
+      minConnectionHD:   1.5,  // Pexip: Teams leg is 1.5 HD at SD *and* HD quality — no quality discount below 1.5
       presentationExtra: true,
       presentationHD:    0.5,
       gatewayLegs:       2,
