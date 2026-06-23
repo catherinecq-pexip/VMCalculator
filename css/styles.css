@@ -782,6 +782,15 @@ input[type="range"] {
 .badge-management  { background: #EBF4FF; color: #2B6CB0; }
 
 /* ── Bandwidth detail ───────────────────────────────────────────────────────── */
+.bw-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--pex-purple);
+  margin-bottom: 10px;
+}
+
 .bw-total-row {
   display: flex;
   justify-content: space-between;
