@@ -52,7 +52,7 @@
           description: '',
           nodes: [],
           expanded: true,
-          endpointsExpanded: false,
+          nodesExpanded: false,
           endpointAssignments: {
             sip_h323: 0, zoom: 0, webrtc: 0,
             teams: 0, google_meet: 0, skype_for_business: 0,
@@ -78,9 +78,9 @@
         const loc = locations.find(l => l.id === id);
         if (loc) loc.expanded = !loc.expanded;
       }
-      function toggleLocationEndpoints(id) {
+      function toggleLocationNodes(id) {
         const loc = locations.find(l => l.id === id);
-        if (loc) loc.endpointsExpanded = !loc.endpointsExpanded;
+        if (loc) loc.nodesExpanded = !loc.nodesExpanded;
       }
 
       // Derived topology state
@@ -653,7 +653,7 @@
         addNodeToLocation,
         removeNodeFromLocation,
         toggleLocation,
-        toggleLocationEndpoints,
+        toggleLocationNodes,
 
         // constants for template
         LAYOUTS:                  C.LAYOUTS,

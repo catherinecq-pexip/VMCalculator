@@ -164,54 +164,62 @@
               <button class="btn-remove" @click.stop="removeLocation(loc.id)" title="Remove location">✕</button>
             </div>
             <div class="location-nodes" v-show="loc.expanded">
-              <!-- Node list -->
-              <p class="no-nodes-hint" v-if="loc.nodes.length === 0">
-                No nodes — click "Add Node" to define compute for this location.
-              </p>
-              <div class="node-row" v-for="node in loc.nodes" :key="node.id">
-                <input type="text" v-model="node.name" placeholder="Node name (optional)" />
-                <select v-model="node.role">
-                  <option value="transcoding">Transcoding (Internal)</option>
-                  <option value="proxy">Proxy (DMZ / Edge)</option>
-                  <option value="external">External (Public-facing)</option>
-                </select>
-                <button class="btn-remove" @click="removeNodeFromLocation(loc.id, node.id)" title="Remove node">✕</button>
-              </div>
-              <button class="btn-add" style="margin-top:6px" @click="addNodeToLocation(loc.id)">＋ Add Node</button>
 
-              <!-- Endpoint assignment -->
+              <!-- ── Endpoint Assignment (always visible) ──────────────────── -->
+              <div class="location-endpoints-section">
+                <div class="location-endpoints-header">
+                  <strong>Assign Endpoints</strong>
+                  <span class="endpoints-cta">— Required for meeting template generation</span>
+                </div>
+                <div class="location-endpoint-assignments">
+                  <p class="no-nodes-hint" v-if="endpointRows.every(r => !r.count)">
+                    Define endpoint counts in ① first.
+                  </p>
+                  <table class="assign-table" v-else>
+                    <tbody>
+                      <tr v-for="row in endpointRows" :key="row.type" v-show="row.count > 0">
+                        <td class="type-cell" style="font-size:12px">{{ ENDPOINT_TYPES[row.type]?.label }}</td>
+                        <td>
+                          <input type="number" v-model.number="loc.endpointAssignments[row.type]"
+                                 min="0" :max="row.count" placeholder="0" />
+                        </td>
+                        <td class="assign-counter"
+                            :class="{
+                              'assign-full':    unassignedEndpointCounts[row.type] === 0,
+                              'assign-partial': unassignedEndpointCounts[row.type] > 0
+                                                && unassignedEndpointCounts[row.type] < row.count,
+                            }">
+                          {{ unassignedEndpointCounts[row.type] }}/{{ row.count }}
+                          <span style="font-weight:400;color:var(--pex-text-muted)"> unassigned</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- ── Node Configuration (collapsible, minimized by default) ─── -->
               <div class="section-divider" style="margin:10px 0"></div>
-              <div class="location-endpoints-toggle" @click="toggleLocationEndpoints(loc.id)">
-                <span>{{ loc.endpointsExpanded ? '▾' : '▸' }} Endpoints</span>
-                <span class="text-muted" style="font-size:11px;margin-left:4px">
-                  — assign which endpoints are physically at this location
-                </span>
+              <div class="location-nodes-toggle" @click="toggleLocationNodes(loc.id)">
+                <span class="location-sub-expand-icon">{{ loc.nodesExpanded ? '▾' : '▸' }}</span>
+                <span>Node Configuration</span>
               </div>
-              <div v-show="loc.endpointsExpanded" class="location-endpoint-assignments">
-                <p class="no-nodes-hint" v-if="endpointRows.every(r => !r.count)">
-                  Define endpoint counts in ① first.
+              <div v-show="loc.nodesExpanded">
+                <p class="no-nodes-hint" v-if="loc.nodes.length === 0">
+                  No nodes — click "Add Node" to define compute for this location.
                 </p>
-                <table class="assign-table" v-else>
-                  <tbody>
-                    <tr v-for="row in endpointRows" :key="row.type" v-show="row.count > 0">
-                      <td class="type-cell" style="font-size:12px">{{ ENDPOINT_TYPES[row.type]?.label }}</td>
-                      <td>
-                        <input type="number" v-model.number="loc.endpointAssignments[row.type]"
-                               min="0" :max="row.count" placeholder="0" />
-                      </td>
-                      <td class="assign-counter"
-                          :class="{
-                            'assign-full':    unassignedEndpointCounts[row.type] === 0,
-                            'assign-partial': unassignedEndpointCounts[row.type] > 0
-                                              && unassignedEndpointCounts[row.type] < row.count,
-                          }">
-                        {{ unassignedEndpointCounts[row.type] }}/{{ row.count }}
-                        <span style="font-weight:400;color:var(--pex-text-muted)"> unassigned</span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                <div class="node-row" v-for="node in loc.nodes" :key="node.id">
+                  <input type="text" v-model="node.name" placeholder="Node name (optional)" />
+                  <select v-model="node.role">
+                    <option value="transcoding">Transcoding (Internal)</option>
+                    <option value="proxy">Proxy (DMZ / Edge)</option>
+                    <option value="external">External (Public-facing)</option>
+                  </select>
+                  <button class="btn-remove" @click="removeNodeFromLocation(loc.id, node.id)" title="Remove node">✕</button>
+                </div>
+                <button class="btn-add" style="margin-top:6px" @click="addNodeToLocation(loc.id)">＋ Add Node</button>
               </div>
+
             </div>
           </div>
 
