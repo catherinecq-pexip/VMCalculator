@@ -139,8 +139,9 @@
           }));
       }
 
-      // Capacity ceiling: min of floor(assigned/count) across all filled participant rows
-      function maxCountForTemplate(tmpl) {
+      // Per-template cap based solely on assignments, ignoring other templates.
+      // Used as the base for pool accounting — keeps effectiveCountForTemplate non-circular.
+      function simpleCap(tmpl) {
         const caps = (tmpl.participants || [])
           .filter(p => Number(p.count) > 0 && p.locationId)
           .map(p => {
@@ -149,6 +150,46 @@
             return Math.floor(assigned / Number(p.count));
           });
         if (caps.length) return Math.min(...caps);
+        const hostLoc = locations.find(l => l.id === tmpl.hostLocationId);
+        return Number(hostLoc?.endpointAssignments?.[tmpl.meetingType]) || 0;
+      }
+
+      // Reactive pool: total endpoint slots committed across ALL templates.
+      // Using simpleCap (not maxCountForTemplate) avoids a circular dependency.
+      // Being a computed() ensures Vue re-evaluates whenever assignments or counts change.
+      const allocatedEndpointSlots = computed(() => {
+        const slots = {};
+        meetingTemplates.forEach(tmpl => {
+          const effCount = Math.min(Number(tmpl.meetingCount) || 0, simpleCap(tmpl));
+          (tmpl.participants || []).forEach(p => {
+            if (!p.locationId || !Number(p.count)) return;
+            const key = p.endpointType + '|' + p.locationId;
+            slots[key] = (slots[key] || 0) + effCount * Number(p.count);
+          });
+        });
+        return slots;
+      });
+
+      // Pool-aware cap: available = assigned − what OTHER templates are using.
+      // Reading allocatedEndpointSlots.value (a computed) guarantees reactive updates
+      // whenever assignments change or any other template's meeting count changes.
+      function maxCountForTemplate(tmpl) {
+        const slots = allocatedEndpointSlots.value;
+        const selfSimpleCap = simpleCap(tmpl);
+        const selfEffCount = Math.min(Number(tmpl.meetingCount) || 0, selfSimpleCap);
+        const caps = (tmpl.participants || [])
+          .filter(p => Number(p.count) > 0 && p.locationId)
+          .map(p => {
+            const loc = locations.find(l => l.id === p.locationId);
+            const assigned = Number(loc?.endpointAssignments?.[p.endpointType]) || 0;
+            const key = p.endpointType + '|' + p.locationId;
+            const selfUsed    = selfEffCount * Number(p.count);
+            const usedByOthers = Math.max(0, (slots[key] || 0) - selfUsed);
+            const available    = Math.max(0, assigned - usedByOthers);
+            return Math.floor(available / Number(p.count));
+          });
+        if (caps.length) return Math.min(...caps);
+        // Fallback when no participant counts are set yet
         const hostLoc = locations.find(l => l.id === tmpl.hostLocationId);
         return Number(hostLoc?.endpointAssignments?.[tmpl.meetingType]) || 0;
       }
