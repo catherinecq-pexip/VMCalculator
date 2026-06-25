@@ -750,6 +750,13 @@ input[type="range"] {
 .stat-box.accent .stat-value { color: #fff; }
 .stat-box.accent .stat-label { color: rgba(255,255,255,0.55); }
 
+.stat-box.accent-warn {
+  background: var(--warn-amber);
+  border-color: var(--warn-amber);
+}
+.stat-box.accent-warn .stat-value { color: #fff; }
+.stat-box.accent-warn .stat-label { color: rgba(255,255,255,0.8); }
+
 /* ── Data tables in results ─────────────────────────────────────────────────── */
 .data-table {
   width: 100%;

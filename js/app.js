@@ -282,10 +282,34 @@
       // ── hardware ──────────────────────────────────────────────────────────
       const cpuInstructionSet = ref('avx2');
       const cpuClockGhz       = ref(3.0);
-      const cpuCoresPerSocket = ref(16);
-      const nodeVcpuSize      = ref(32);
+      const cpuCoresPerSocket = ref(24);
+      const cpuSocketCount    = ref(2);
       const hyperthreading    = ref(false);
       const hypervisor        = ref('vmware');
+
+      // Total physical cores across all sockets
+      const totalPhysicalCores = computed(() =>
+        cpuCoresPerSocket.value * cpuSocketCount.value
+      );
+      // Total vCPU available from hardware (HT doubles logical threads)
+      const totalAvailableVCPU = computed(() =>
+        totalPhysicalCores.value * (hyperthreading.value ? 2 : 1)
+      );
+      // Conferencing nodes: ~22 physical cores per node (NUMA-aware, per socket)
+      const recommendedNodeCount = computed(() =>
+        Math.max(1, Math.floor(totalPhysicalCores.value / C.CORES_PER_NODE_TARGET))
+      );
+      // vCPU size of each conferencing node
+      const vCPUPerNode = computed(() =>
+        Math.ceil(totalPhysicalCores.value / recommendedNodeCount.value) * (hyperthreading.value ? 2 : 1)
+      );
+
+      function roundToStandardRAM(gb) {
+        for (const s of [8, 16, 32, 64, 128, 256]) { if (s >= gb) return s; }
+        return 256;
+      }
+      // RAM per node: 1 GB per vCPU, rounded to standard size
+      const ramPerNode = computed(() => roundToStandardRAM(vCPUPerNode.value));
 
       // ── endpoint reference data (display only — HD/participant) ───────────
       const rowResults = computed(() =>
@@ -519,9 +543,8 @@
       const vCPURequired = computed(() =>
         Math.ceil(totalHDWithHeadroom.value / Math.max(effectiveHDperVcpu.value, 0.01))
       );
-      const transcodingNodeCount = computed(() =>
-        Math.max(1, Math.ceil(vCPURequired.value / nodeVcpuSize.value))
-      );
+      // Node count is hardware-derived (floor(total_cores / 22)), not HD-derived
+      const transcodingNodeCount = computed(() => recommendedNodeCount.value);
       const proxyNodeCount = computed(() =>
         totalDefinedProxyNodes.value + totalDefinedExternalNodes.value
       );
@@ -571,16 +594,29 @@
       const warnings = computed(() => {
         const w = [];
 
-        if (nodeVcpuSize.value > cpuCoresPerSocket.value && !hyperthreading.value) {
+        if (cpuSocketCount.value < 2) {
           w.push({
             type: 'numa',
-            text: `Node size (${nodeVcpuSize.value} vCPU) exceeds physical cores per socket (${cpuCoresPerSocket.value}). Enable hyperthreading with VM pinning, or reduce node size.`,
+            text: 'Minimum 2 CPU sockets required. Conferencing nodes must be NUMA-pinned to a single socket — single-socket servers cannot safely host Pexip nodes.',
           });
         }
-        if (nodeVcpuSize.value > cpuCoresPerSocket.value * 2) {
+        if (cpuClockGhz.value < C.CPU_MIN_CLOCK_GHZ) {
           w.push({
             type: 'numa',
-            text: `Node size (${nodeVcpuSize.value} vCPU) exceeds all logical threads on one socket (${cpuCoresPerSocket.value * 2}). Pexip does not support this configuration.`,
+            text: `Base clock ${cpuClockGhz.value.toFixed(1)} GHz is below the recommended minimum of ${C.CPU_MIN_CLOCK_GHZ} GHz for Pexip conferencing nodes.`,
+          });
+        }
+        const nodesPerSocket = recommendedNodeCount.value / cpuSocketCount.value;
+        if (nodesPerSocket > 2) {
+          w.push({
+            type: 'numa',
+            text: `${Math.round(nodesPerSocket)} nodes per socket exceeds the maximum of 2. Pexip only supports up to 2 nodes per socket when ≥44 cores are available per socket.`,
+          });
+        }
+        if (vCPURequired.value > totalAvailableVCPU.value) {
+          w.push({
+            type: 'numa',
+            text: `Insufficient hardware: ${vCPURequired.value} vCPU required but only ${totalAvailableVCPU.value} vCPU available across ${recommendedNodeCount.value} node${recommendedNodeCount.value !== 1 ? 's' : ''}. Add more cores/sockets or reduce meeting demand.`,
           });
         }
         if (hypervisor.value !== 'cloud') {
@@ -638,21 +674,23 @@
       const nodeRecommendations = computed(() => {
         const rows = [];
         const tLocs = numberOfTranscodingLocations.value;
+        const vcpu  = vCPUPerNode.value;
+        const ram   = ramPerNode.value;
 
         if (tLocs > 1) {
           const perLoc = Math.ceil(transcodingNodeCount.value / tLocs);
           transcodingLocations.value.forEach(loc => {
             rows.push({
               type: 'Transcoding', location: loc.name || 'Unnamed',
-              count: perLoc, vcpu: nodeVcpuSize.value, ram: nodeVcpuSize.value * 2,
-              note: `${loc.name || 'Location'} — ${nodeVcpuSize.value} vCPU each`,
+              count: perLoc, vcpu, ram,
+              note: `${loc.name || 'Location'} — ${vcpu} vCPU / ${ram} GB RAM each`,
             });
           });
         } else {
           rows.push({
             type: 'Transcoding', location: null,
-            count: transcodingNodeCount.value, vcpu: nodeVcpuSize.value, ram: nodeVcpuSize.value * 2,
-            note: `Handles media mixing — ${nodeVcpuSize.value} vCPU each`,
+            count: transcodingNodeCount.value, vcpu, ram,
+            note: `Handles media mixing — ${vcpu} vCPU / ${ram} GB RAM each`,
           });
         }
         if (totalDefinedProxyNodes.value > 0) {
@@ -669,13 +707,14 @@
             note: 'Public-facing, routes external calls inbound',
           });
         }
-        rows.push({ type: 'Management', location: null, count: 1, vcpu: 4, ram: 8, note: 'Always 1 — no media processing' });
+        rows.push({ type: 'Management', location: null, count: 1, vcpu: 8, ram: 8, note: 'Recommended 8 vCPU / 8 GB for API & integrations' });
         return rows;
       });
 
       // ── lookup tables exposed to template ─────────────────────────────────
       const EFFICIENCY_BASE = { legacy: 2.5, avx2: 4.0, avx512: 6.0 };
       const HV_FACTORS      = { vmware: 1.0, kvm: 0.95, hyperv: 0.90, cloud: 1.0 };
+      const CPU_MIN_CLOCK   = C.CPU_MIN_CLOCK_GHZ;
 
       // ── return ─────────────────────────────────────────────────────────────
       return {
@@ -699,9 +738,16 @@
         cpuInstructionSet,
         cpuClockGhz,
         cpuCoresPerSocket,
-        nodeVcpuSize,
+        cpuSocketCount,
         hyperthreading,
         hypervisor,
+
+        // hardware capacity (computed)
+        totalPhysicalCores,
+        totalAvailableVCPU,
+        recommendedNodeCount,
+        vCPUPerNode,
+        ramPerNode,
 
         // computed — endpoint ref data
         rowResults,
@@ -760,6 +806,7 @@
         QUALITY_LABELS:           C.QUALITY_LABELS,
         EFFICIENCY_BASE,
         HV_FACTORS,
+        CPU_MIN_CLOCK,
 
         // formatters
         fmtHD,

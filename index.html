@@ -36,13 +36,13 @@
     </div>
     <div class="summary-chip">
       <span class="chip-label">vCPU Required</span>
-      <span class="chip-value">{{ vCPURequired }}</span>
-      <span class="chip-unit">virtual CPUs</span>
+      <span class="chip-value" :style="vCPURequired > totalAvailableVCPU ? 'color:var(--warn-amber)' : ''">{{ vCPURequired }}</span>
+      <span class="chip-unit">of {{ totalAvailableVCPU }} available</span>
     </div>
     <div class="summary-chip">
       <span class="chip-label">Transcoding Nodes</span>
       <span class="chip-value">{{ transcodingNodeCount }}</span>
-      <span class="chip-unit">× {{ nodeVcpuSize }} vCPU each</span>
+      <span class="chip-unit">× {{ vCPUPerNode }} vCPU each</span>
     </div>
     <div class="summary-chip">
       <span class="chip-label">Total Bandwidth</span>
@@ -435,19 +435,15 @@
         </div>
         <div class="section-body">
 
-          <label class="field-label">Instruction Set Support</label>
-          <div class="radio-group mb-3">
-            <div class="radio-option">
-              <input type="radio" id="isa-legacy" value="legacy" v-model="cpuInstructionSet" />
-              <label for="isa-legacy">Legacy (no AVX)</label>
+          <!-- CPU topology inputs -->
+          <div class="field-row">
+            <div class="field-group">
+              <label class="field-label">Physical cores per socket</label>
+              <input type="number" v-model.number="cpuCoresPerSocket" min="4" max="128" step="1" />
             </div>
-            <div class="radio-option">
-              <input type="radio" id="isa-avx2" value="avx2" v-model="cpuInstructionSet" />
-              <label for="isa-avx2">AVX2</label>
-            </div>
-            <div class="radio-option">
-              <input type="radio" id="isa-avx512" value="avx512" v-model="cpuInstructionSet" />
-              <label for="isa-avx512">AVX-512</label>
+            <div class="field-group">
+              <label class="field-label">CPU sockets <span style="color:var(--pex-text-muted);font-weight:400">(min 2)</span></label>
+              <input type="number" v-model.number="cpuSocketCount" min="2" max="16" step="1" />
             </div>
           </div>
 
@@ -455,51 +451,17 @@
             <div class="field-group">
               <label class="field-label">
                 Base clock —
-                <strong style="color:var(--pex-teal-dark)">{{ cpuClockGhz.toFixed(1) }} GHz</strong>
+                <strong :style="cpuClockGhz < CPU_MIN_CLOCK ? 'color:var(--warn-amber)' : 'color:var(--pex-teal-dark)'">
+                  {{ cpuClockGhz.toFixed(1) }} GHz
+                  <span v-if="cpuClockGhz < CPU_MIN_CLOCK"> ⚠</span>
+                </strong>
               </label>
               <div class="slider-row">
-                <input type="range" v-model.number="cpuClockGhz" min="1.0" max="4.5" step="0.1" />
-                <span class="slider-value">{{ cpuClockGhz.toFixed(1) }}</span>
+                <input type="range" v-model.number="cpuClockGhz" min="2.6" max="4.5" step="0.1" />
+                <span class="slider-value" :style="cpuClockGhz < CPU_MIN_CLOCK ? 'color:var(--warn-amber)' : ''">
+                  {{ cpuClockGhz.toFixed(1) }}
+                </span>
               </div>
-            </div>
-            <div class="field-group">
-              <label class="field-label">Physical cores per socket</label>
-              <input type="number" v-model.number="cpuCoresPerSocket" min="4" max="128" step="1" />
-            </div>
-          </div>
-
-          <div class="section-divider"></div>
-
-          <label class="field-label">Transcoding node vCPU size</label>
-          <div class="radio-group mb-3">
-            <div class="radio-option" v-for="size in NODE_SIZES" :key="size">
-              <input type="radio" :id="'ns-'+size" :value="size" v-model="nodeVcpuSize" />
-              <label :for="'ns-'+size">{{ size }} vCPU</label>
-            </div>
-          </div>
-
-          <!-- NUMA alignment indicator -->
-          <div class="breakdown-row">
-            <span class="bd-label">Node vCPU vs cores per socket</span>
-            <span class="bd-val" :style="nodeVcpuSize > cpuCoresPerSocket ? 'color:var(--warn-amber)' : 'color:var(--success)'">
-              {{ nodeVcpuSize }}
-              <span v-if="nodeVcpuSize <= cpuCoresPerSocket"> ✓ fits within one NUMA node</span>
-              <span v-else-if="!hyperthreading"> ⚠ spans NUMA nodes — enable HT or reduce size</span>
-              <span v-else> (HT pinning required)</span>
-            </span>
-          </div>
-
-          <div class="section-divider"></div>
-
-          <div class="field-row">
-            <div class="field-group">
-              <label class="field-label">Hypervisor</label>
-              <select v-model="hypervisor">
-                <option value="vmware">VMware (1.0×)</option>
-                <option value="kvm">KVM (0.95×)</option>
-                <option value="hyperv">Hyper-V (0.90×)</option>
-                <option value="cloud">Cloud / hosted (1.0×)</option>
-              </select>
             </div>
             <div class="field-group">
               <label class="field-label">Hyperthreading</label>
@@ -510,16 +472,79 @@
                 </div>
                 <div class="radio-option">
                   <input type="radio" id="ht-on" :value="true" v-model="hyperthreading" />
-                  <label for="ht-on">ON + pinned (+40%)</label>
+                  <label for="ht-on">ON + NUMA-pinned (×2)</label>
                 </div>
               </div>
             </div>
           </div>
 
+          <!-- Computed hardware capacity summary -->
+          <div class="section-divider"></div>
+          <div class="breakdown-row">
+            <span class="bd-label">Total physical cores</span>
+            <span class="bd-val">{{ totalPhysicalCores }} cores ({{ cpuCoresPerSocket }} × {{ cpuSocketCount }} sockets)</span>
+          </div>
+          <div class="breakdown-row">
+            <span class="bd-label">Total vCPU available</span>
+            <span class="bd-val" :style="vCPURequired > totalAvailableVCPU ? 'color:var(--warn-amber)' : 'color:var(--success)'">
+              {{ totalAvailableVCPU }} vCPU
+              <span style="font-weight:400;color:var(--pex-text-muted)">
+                ({{ totalPhysicalCores }} cores × {{ hyperthreading ? '2 with HT' : '1 without HT' }})
+              </span>
+            </span>
+          </div>
+          <div class="breakdown-row">
+            <span class="bd-label">Conferencing nodes</span>
+            <span class="bd-val">{{ recommendedNodeCount }} node{{ recommendedNodeCount !== 1 ? 's' : '' }}
+              <span style="font-weight:400;color:var(--pex-text-muted)">
+                (floor({{ totalPhysicalCores }} ÷ 22), NUMA-pinned per socket)
+              </span>
+            </span>
+          </div>
+          <div class="breakdown-row">
+            <span class="bd-label">vCPU per node</span>
+            <span class="bd-val">{{ vCPUPerNode }} vCPU</span>
+          </div>
+          <div class="breakdown-row">
+            <span class="bd-label">RAM per node</span>
+            <span class="bd-val">{{ ramPerNode }} GB <span style="font-weight:400;color:var(--pex-text-muted)">(1 GB/vCPU, rounded to standard)</span></span>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <div class="field-row">
+            <div class="field-group">
+              <label class="field-label">Instruction Set Support</label>
+              <div class="radio-group" style="margin-top:6px">
+                <div class="radio-option">
+                  <input type="radio" id="isa-legacy" value="legacy" v-model="cpuInstructionSet" />
+                  <label for="isa-legacy">Legacy (no AVX)</label>
+                </div>
+                <div class="radio-option">
+                  <input type="radio" id="isa-avx2" value="avx2" v-model="cpuInstructionSet" />
+                  <label for="isa-avx2">AVX2</label>
+                </div>
+                <div class="radio-option">
+                  <input type="radio" id="isa-avx512" value="avx512" v-model="cpuInstructionSet" />
+                  <label for="isa-avx512">AVX-512</label>
+                </div>
+              </div>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Hypervisor</label>
+              <select v-model="hypervisor" style="margin-top:6px">
+                <option value="vmware">VMware (1.0×)</option>
+                <option value="kvm">KVM (0.95×)</option>
+                <option value="hyperv">Hyper-V (0.90×)</option>
+                <option value="cloud">Cloud / hosted (1.0×)</option>
+              </select>
+            </div>
+          </div>
+
           <div class="inline-note">
-            Reference: 16-core AVX-512 CPU at 2.8 GHz ≈ 6.0 HD/vCPU.
-            Clock speed scales capacity linearly from a 2.8 GHz baseline.
-            Fewer, larger nodes outperform many smaller ones. Never overcommit CPU.
+            <strong>NUMA rules:</strong> Minimum 2 sockets. Each conferencing node is pinned to one socket (~22 physical cores each).
+            Hyperthreading doubles logical threads — enable only with strict NUMA VM pinning.
+            Minimum recommended base clock: 2.6 GHz.
           </div>
         </div>
       </div>
@@ -560,14 +585,18 @@
               <div class="stat-value">{{ fmtHD(totalHDWithHeadroom) }}</div>
               <div class="stat-label">With 25% Headroom</div>
             </div>
-            <div class="stat-box accent">
+            <div class="stat-box" :class="vCPURequired > totalAvailableVCPU ? 'accent-warn' : 'accent'">
               <div class="stat-value">{{ vCPURequired }}</div>
               <div class="stat-label">vCPU Required</div>
             </div>
-            <div class="stat-box accent">
-              <div class="stat-value">{{ transcodingNodeCount }}</div>
-              <div class="stat-label">Transcoding Nodes</div>
+            <div class="stat-box" :class="vCPURequired > totalAvailableVCPU ? 'accent-warn' : 'accent'">
+              <div class="stat-value">{{ totalAvailableVCPU }}</div>
+              <div class="stat-label">vCPU Available</div>
             </div>
+          </div>
+          <div class="breakdown-row" style="margin-top:8px">
+            <span class="bd-label">Conferencing nodes ({{ vCPUPerNode }} vCPU / {{ ramPerNode }} GB each)</span>
+            <span class="bd-val">{{ transcodingNodeCount }} node{{ transcodingNodeCount !== 1 ? 's' : '' }}</span>
           </div>
 
           <div style="margin-top:14px">

@@ -147,6 +147,8 @@ window.PEXIP = {
   },
 
   CPU_REFERENCE_CLOCK: 2.8, // GHz
+  CPU_MIN_CLOCK_GHZ:   2.6, // minimum recommended base clock for Pexip nodes
+  CORES_PER_NODE_TARGET: 22, // physical cores per conferencing node target
 
   // Hyperthreading bonus — only valid when VMs are NUMA-pinned to socket
   HT_BONUS_FACTOR: 1.4,
