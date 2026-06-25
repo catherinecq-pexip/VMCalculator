@@ -260,11 +260,8 @@
               </span>
               <span style="font-size:11px;color:var(--pex-text-muted);white-space:nowrap;margin-left:auto">Meetings:</span>
               <input type="number" v-model.number="tmpl.meetingCount"
-                     min="0" :max="maxCountForTemplate(tmpl)" step="1" placeholder="1"
+                     min="0" step="1" placeholder="1"
                      @click.stop style="width:52px;text-align:center;margin:0 4px" />
-              <span style="font-size:11px;color:var(--pex-text-muted);white-space:nowrap">
-                / {{ maxCountForTemplate(tmpl) }} max
-              </span>
               <span class="meeting-hd-badge" style="margin-left:6px">
                 {{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdTotal ?? 0) }} HD each
               </span>
@@ -395,9 +392,36 @@
           <div v-if="meetingTemplates.length > 0" class="inline-note" style="margin-top:10px">
             <strong>{{ numberOfMeetings }} meeting{{ numberOfMeetings !== 1 ? 's' : '' }} total</strong>
             across {{ meetingTemplates.length }} template{{ meetingTemplates.length !== 1 ? 's' : '' }}.
-            Meeting count is capped by endpoint assignments.
+            Endpoint demand is tracked in the pool summary below.
           </div>
           <button class="btn-add btn-add-location" style="margin-top:8px" @click="addBlankTemplate">＋ Add Template</button>
+
+          <!-- Pool Allocation Summary -->
+          <div class="pool-allocation-panel" v-if="poolAllocation.length > 0">
+            <div class="pool-allocation-title">Endpoint Pool Allocation</div>
+            <div class="pool-entry" v-for="entry in poolAllocation" :key="entry.endpointType + entry.locationId">
+              <div class="pool-entry-header">
+                <span class="pool-entry-label">
+                  {{ entry.locationName }}
+                  <span style="color:var(--pex-text-muted);font-weight:400"> / </span>
+                  {{ entry.typeName }}
+                </span>
+                <span class="pool-entry-count" :class="{ 'pool-over': entry.overCommitted }">
+                  <span v-if="entry.overCommitted">⚠ </span>{{ entry.demand }} / {{ entry.assigned }} assigned
+                </span>
+              </div>
+              <div class="pool-bar-track">
+                <div class="pool-bar-fill"
+                     :class="{ 'pool-bar-over': entry.overCommitted }"
+                     :style="{ width: Math.min(100, entry.assigned > 0 ? (entry.demand / entry.assigned) * 100 : 100) + '%' }">
+                </div>
+              </div>
+              <div class="pool-template-line" v-for="t in entry.templates" :key="t.id">
+                <span>· {{ t.label }}</span>
+                <span>{{ t.countPerMeeting }}/meeting × {{ t.meetingCount }} = <strong>{{ t.countPerMeeting * t.meetingCount }}</strong></span>
+              </div>
+            </div>
+          </div>
 
         </div>
       </div>

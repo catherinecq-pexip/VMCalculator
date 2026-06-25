@@ -139,64 +139,47 @@
           }));
       }
 
-      // Per-template cap based solely on assignments, ignoring other templates.
-      // Used as the base for pool accounting — keeps effectiveCountForTemplate non-circular.
-      function simpleCap(tmpl) {
-        const caps = (tmpl.participants || [])
-          .filter(p => Number(p.count) > 0 && p.locationId)
-          .map(p => {
-            const loc = locations.find(l => l.id === p.locationId);
-            const assigned = Number(loc?.endpointAssignments?.[p.endpointType]) || 0;
-            return Math.floor(assigned / Number(p.count));
-          });
-        if (caps.length) return Math.min(...caps);
-        const hostLoc = locations.find(l => l.id === tmpl.hostLocationId);
-        return Number(hostLoc?.endpointAssignments?.[tmpl.meetingType]) || 0;
+      // Meeting count is user-controlled — no hard cap enforced.
+      // Pool tracking and over-commitment warnings are handled by poolAllocation.
+      function effectiveCountForTemplate(tmpl) {
+        return Number(tmpl.meetingCount) || 0;
       }
 
-      // Reactive pool: total endpoint slots committed across ALL templates.
-      // Using simpleCap (not maxCountForTemplate) avoids a circular dependency.
-      // Being a computed() ensures Vue re-evaluates whenever assignments or counts change.
-      const allocatedEndpointSlots = computed(() => {
-        const slots = {};
+      // Demand tracking: total endpoint consumption per (type × location) across all templates.
+      const poolAllocation = computed(() => {
+        const map = {};
+
         meetingTemplates.forEach(tmpl => {
-          const effCount = Math.min(Number(tmpl.meetingCount) || 0, simpleCap(tmpl));
+          const meetingCount = Number(tmpl.meetingCount) || 0;
           (tmpl.participants || []).forEach(p => {
-            if (!p.locationId || !Number(p.count)) return;
+            const count = Number(p.count) || 0;
+            if (!count || !p.locationId) return;
             const key = p.endpointType + '|' + p.locationId;
-            slots[key] = (slots[key] || 0) + effCount * Number(p.count);
+            if (!map[key]) {
+              map[key] = { endpointType: p.endpointType, locationId: p.locationId, demand: 0, templates: [] };
+            }
+            map[key].demand += meetingCount * count;
+            map[key].templates.push({
+              id:             tmpl.id,
+              label:          C.ENDPOINT_TYPES[tmpl.meetingType]?.label ?? tmpl.meetingType,
+              countPerMeeting: count,
+              meetingCount,
+            });
           });
         });
-        return slots;
+
+        return Object.values(map).map(entry => {
+          const loc      = locations.find(l => l.id === entry.locationId);
+          const assigned = Number(loc?.endpointAssignments?.[entry.endpointType]) || 0;
+          return {
+            ...entry,
+            locationName:  loc?.name || 'Unnamed',
+            typeName:      C.ENDPOINT_TYPES[entry.endpointType]?.label ?? entry.endpointType,
+            assigned,
+            overCommitted: entry.demand > assigned,
+          };
+        });
       });
-
-      // Pool-aware cap: available = assigned − what OTHER templates are using.
-      // Reading allocatedEndpointSlots.value (a computed) guarantees reactive updates
-      // whenever assignments change or any other template's meeting count changes.
-      function maxCountForTemplate(tmpl) {
-        const slots = allocatedEndpointSlots.value;
-        const selfSimpleCap = simpleCap(tmpl);
-        const selfEffCount = Math.min(Number(tmpl.meetingCount) || 0, selfSimpleCap);
-        const caps = (tmpl.participants || [])
-          .filter(p => Number(p.count) > 0 && p.locationId)
-          .map(p => {
-            const loc = locations.find(l => l.id === p.locationId);
-            const assigned = Number(loc?.endpointAssignments?.[p.endpointType]) || 0;
-            const key = p.endpointType + '|' + p.locationId;
-            const selfUsed    = selfEffCount * Number(p.count);
-            const usedByOthers = Math.max(0, (slots[key] || 0) - selfUsed);
-            const available    = Math.max(0, assigned - usedByOthers);
-            return Math.floor(available / Number(p.count));
-          });
-        if (caps.length) return Math.min(...caps);
-        // Fallback when no participant counts are set yet
-        const hostLoc = locations.find(l => l.id === tmpl.hostLocationId);
-        return Number(hostLoc?.endpointAssignments?.[tmpl.meetingType]) || 0;
-      }
-
-      function effectiveCountForTemplate(tmpl) {
-        return Math.min(Number(tmpl.meetingCount) || 0, maxCountForTemplate(tmpl));
-      }
 
       // Auto-generate templates from (location × endpointType) assignment combos
       watch(
@@ -642,6 +625,12 @@
             text: 'No meetings configured. Assign endpoints to locations in ② — meeting templates are generated automatically. Set meeting counts in ③.',
           });
         }
+        poolAllocation.value.filter(e => e.overCommitted).forEach(e => {
+          w.push({
+            type: 'numa',
+            text: `Endpoint pool over-committed — ${e.locationName} / ${e.typeName}: ${e.demand} demanded across templates, only ${e.assigned} assigned. Reduce meeting counts or increase assignments.`,
+          });
+        });
         return w;
       });
 
@@ -701,7 +690,7 @@
         // meeting builder — templates
         meetingTemplates,
         meetingResults,
-        maxCountForTemplate,
+        poolAllocation,
         duplicateTemplate,
         addBlankTemplate,
         removeMeetingTemplate,

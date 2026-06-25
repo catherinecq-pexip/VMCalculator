@@ -1151,6 +1151,77 @@ footer a:hover { text-decoration: underline; }
 
 .location-nodes-toggle:hover { color: var(--pex-teal-dark); }
 
+/* ── Endpoint Pool Allocation panel ────────────────────────────────────────── */
+.pool-allocation-panel {
+  margin-top: 14px;
+  border: 1px solid var(--pex-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pool-allocation-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #fff;
+  background: var(--pex-slate);
+  padding: 6px 12px;
+}
+
+.pool-entry {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--pex-border);
+}
+.pool-entry:last-child { border-bottom: none; }
+
+.pool-entry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 5px;
+  gap: 8px;
+}
+
+.pool-entry-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pex-text);
+}
+
+.pool-entry-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--success);
+  white-space: nowrap;
+}
+.pool-entry-count.pool-over { color: var(--warn-amber); }
+
+.pool-bar-track {
+  height: 5px;
+  background: #EDF2F7;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.pool-bar-fill {
+  height: 100%;
+  background: var(--pex-teal);
+  border-radius: 3px;
+  transition: width 0.25s;
+}
+.pool-bar-fill.pool-bar-over { background: var(--warn-amber); }
+
+.pool-template-line {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--pex-text-muted);
+  padding: 1px 0 1px 8px;
+}
+.pool-template-line strong { color: var(--pex-slate); }
+
 /* ── Responsive tweaks ──────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .field-row, .field-row-3 { grid-template-columns: 1fr; }
