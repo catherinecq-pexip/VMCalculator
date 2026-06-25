@@ -540,9 +540,7 @@
       });
 
       // ── step 7: vCPU + node count ─────────────────────────────────────────
-      const vCPURequired = computed(() =>
-        Math.ceil(totalHDWithHeadroom.value / Math.max(effectiveHDperVcpu.value, 0.01))
-      );
+      const vCPURequired = computed(() => Math.ceil(totalHDWithHeadroom.value));
       // Node count is hardware-derived (floor(total_cores / 22)), not HD-derived
       const transcodingNodeCount = computed(() => recommendedNodeCount.value);
       const proxyNodeCount = computed(() =>
