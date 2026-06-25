@@ -256,7 +256,7 @@
               <span class="location-sub-expand-icon" style="color:var(--pex-text-muted)">{{ tmpl.expanded ? '▾' : '▸' }}</span>
               <span class="template-meta-badge badge-transcoding">{{ ENDPOINT_TYPES[tmpl.meetingType]?.label }}</span>
               <span class="template-meta-badge" style="background:var(--pex-bg);color:var(--pex-slate);border:1px solid var(--pex-border)">
-                {{ locations.find(l => l.id === tmpl.hostLocationId)?.name || 'No location' }}
+                {{ tmpl.hostLocationId === 'external' ? 'External' : (locations.find(l => l.id === tmpl.hostLocationId)?.name || 'No location') }}
               </span>
               <span style="font-size:11px;color:var(--pex-text-muted);white-space:nowrap;margin-left:auto">Meetings:</span>
               <input type="number" v-model.number="tmpl.meetingCount"
@@ -305,6 +305,7 @@
                   <label class="field-label">Host location</label>
                   <select v-model="tmpl.hostLocationId">
                     <option :value="null">— none —</option>
+                    <option value="external">External</option>
                     <option v-for="loc in locations" :key="loc.id" :value="loc.id">{{ loc.name || 'Unnamed' }}</option>
                   </select>
                 </div>
