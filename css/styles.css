@@ -987,6 +987,92 @@ footer a:hover { text-decoration: underline; }
   border-top: 1px solid #EDF2F7;
 }
 
+/* ── Template meta badges (meeting type + host location in card header) ─────── */
+.template-meta-badge {
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Duplicate button ───────────────────────────────────────────────────────── */
+.btn-duplicate {
+  background: none;
+  border: none;
+  color: var(--pex-text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  padding: 4px 6px;
+  line-height: 1;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.btn-duplicate:hover { background: var(--pex-teal-light); color: var(--pex-teal-dark); }
+
+/* ── Participant type rows in meeting builder ────────────────────────────────── */
+.participant-type-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px dashed #EDF2F7;
+}
+.participant-type-row:last-of-type { border-bottom: none; }
+
+.participant-type-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pex-slate);
+  min-width: 130px;
+  flex-shrink: 0;
+}
+
+.participant-type-external {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--pex-border);
+  border-bottom: none;
+}
+
+/* ── Interop summary block ──────────────────────────────────────────────────── */
+.interop-summary-block {
+  background: var(--pex-bg);
+  border: 1px solid var(--pex-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.interop-summary-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--pex-text-muted);
+  margin-bottom: 6px;
+}
+
+.interop-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 0;
+  color: var(--pex-slate);
+}
+
+.interop-line span:last-child { font-weight: 700; color: var(--pex-text); }
+
+.interop-sub {
+  padding-left: 12px;
+  color: var(--pex-text-muted);
+  font-size: 11px;
+}
+.interop-sub span:last-child { color: var(--pex-text-muted); font-weight: 600; }
+
 /* ── Participant tables inside meeting cards ─────────────────────────────────── */
 .participant-table {
   width: 100%;

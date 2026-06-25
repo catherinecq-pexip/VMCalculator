@@ -239,7 +239,7 @@
         <div class="section-header">
           <div class="section-icon">③</div>
           <h2>Meeting Builder</h2>
-          <span class="section-hint">Templates auto-generated from topology · set participants and scale</span>
+          <span class="section-hint">Auto-generated from ① &amp; ② · duplicate or add custom types</span>
         </div>
         <div class="section-body">
 
@@ -251,90 +251,72 @@
           <!-- Template cards -->
           <div class="meeting-card" v-for="tmpl in meetingTemplates" :key="tmpl.id">
 
-            <!-- Card header: fixed label + meeting count control -->
+            <!-- Card header -->
             <div class="meeting-card-header" @click="tmpl.expanded = !tmpl.expanded">
-              <span style="color:var(--pex-text-muted);font-size:12px">{{ tmpl.expanded ? '▾' : '▸' }}</span>
-
-              <!-- Fixed template identity (location / endpoint type) -->
-              <span style="font-weight:600;font-size:13px;flex:1;min-width:0">
-                {{ locations.find(l => l.id === tmpl.locationId)?.name || 'Unknown' }}
-                <span style="color:var(--pex-text-muted);font-weight:400"> / </span>
-                {{ ENDPOINT_TYPES[tmpl.endpointType]?.label }}
+              <span class="location-sub-expand-icon" style="color:var(--pex-text-muted)">{{ tmpl.expanded ? '▾' : '▸' }}</span>
+              <span class="template-meta-badge badge-transcoding">{{ ENDPOINT_TYPES[tmpl.meetingType]?.label }}</span>
+              <span class="template-meta-badge" style="background:var(--pex-bg);color:var(--pex-slate);border:1px solid var(--pex-border)">
+                {{ locations.find(l => l.id === tmpl.hostLocationId)?.name || 'No location' }}
               </span>
-
-              <!-- Meeting count input -->
-              <span style="font-size:11px;color:var(--pex-text-muted);white-space:nowrap">Meetings:</span>
+              <span style="font-size:11px;color:var(--pex-text-muted);white-space:nowrap;margin-left:auto">Meetings:</span>
               <input type="number" v-model.number="tmpl.meetingCount"
                      min="0" :max="maxCountForTemplate(tmpl)" step="1" placeholder="1"
-                     @click.stop style="width:56px;text-align:center;margin:0 4px" />
+                     @click.stop style="width:52px;text-align:center;margin:0 4px" />
               <span style="font-size:11px;color:var(--pex-text-muted);white-space:nowrap">
                 / {{ maxCountForTemplate(tmpl) }} max
               </span>
-
-              <!-- Per-meeting HD badge -->
-              <span class="meeting-hd-badge" style="margin-left:8px;white-space:nowrap">
+              <span class="meeting-hd-badge" style="margin-left:6px">
                 {{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdTotal ?? 0) }} HD each
               </span>
+              <button class="btn-duplicate" @click.stop="duplicateTemplate(tmpl.id)" title="Duplicate template">⧉</button>
+              <button class="btn-remove" @click.stop="removeMeetingTemplate(tmpl.id)" title="Remove template">✕</button>
             </div>
 
-            <!-- Expanded body: per-meeting configuration -->
+            <!-- Expanded body -->
             <div v-show="tmpl.expanded" class="meeting-card-body">
 
-              <!-- Presentation toggle -->
-              <div class="toggle-row" style="border-bottom:none;padding-bottom:8px;margin-bottom:8px">
-                <div>
-                  <div class="toggle-label">Presentation active</div>
-                  <div class="toggle-desc">
-                    Enables presentation overhead per endpoint type
-                    (WebRTC +1.0 HD/pt, Teams +0.5 HD/pt, Meet/Skype +1.0 HD/pt)
-                  </div>
+              <!-- ① Participants per meeting -->
+              <label class="field-label" style="margin-bottom:6px">Participants per meeting</label>
+              <div class="participant-type-row" v-for="p in tmpl.participants" :key="p.endpointType">
+                <span class="participant-type-label">{{ ENDPOINT_TYPES[p.endpointType]?.label }}</span>
+                <input type="number" v-model.number="p.count" min="0" placeholder="0" style="width:65px;flex-shrink:0" />
+                <select v-model="p.locationId" style="flex:1;min-width:90px">
+                  <option :value="null">— location —</option>
+                  <option v-for="loc in locations" :key="loc.id" :value="loc.id">{{ loc.name || 'Unnamed' }}</option>
+                </select>
+              </div>
+              <!-- External participants -->
+              <div class="participant-type-row participant-type-external">
+                <span class="participant-type-label" style="color:var(--pex-text-muted)">External</span>
+                <input type="number" v-model.number="tmpl.externalCount" min="0" placeholder="0" style="width:65px;flex-shrink:0" />
+                <select v-model="tmpl.externalEndpointType" style="flex:1;min-width:90px">
+                  <option v-for="(def, key) in ENDPOINT_TYPES" :key="key" :value="key">{{ def.label }}</option>
+                </select>
+              </div>
+
+              <div class="section-divider" style="margin:12px 0"></div>
+
+              <!-- ② Meeting settings -->
+              <div class="field-row">
+                <div class="field-group">
+                  <label class="field-label">Meeting type</label>
+                  <select v-model="tmpl.meetingType">
+                    <option v-for="(def, key) in ENDPOINT_TYPES" :key="key" :value="key">{{ def.label }}</option>
+                  </select>
                 </div>
-                <label class="toggle">
-                  <input type="checkbox" v-model="tmpl.presentationActive" />
-                  <span class="toggle-slider"></span>
-                </label>
+                <div class="field-group">
+                  <label class="field-label">Host location</label>
+                  <select v-model="tmpl.hostLocationId">
+                    <option :value="null">— none —</option>
+                    <option v-for="loc in locations" :key="loc.id" :value="loc.id">{{ loc.name || 'Unnamed' }}</option>
+                  </select>
+                </div>
               </div>
 
               <div class="field-row">
-
-                <!-- Participants per meeting by location -->
                 <div class="field-group">
-                  <label class="field-label">Participants per meeting, by location</label>
-                  <table class="participant-table">
-                    <tr v-for="loc in locations" :key="loc.id">
-                      <td style="font-size:12px;min-width:80px">{{ loc.name || 'Unnamed' }}</td>
-                      <td>
-                        <input type="number" min="0" placeholder="0"
-                               :value="tmpl.participantCounts[loc.id] || 0"
-                               @input="tmpl.participantCounts[loc.id] = Number($event.target.value)"
-                               @click.stop />
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="font-size:12px;color:var(--pex-text-muted)">External</td>
-                      <td>
-                        <input type="number" min="0" placeholder="0"
-                               :value="tmpl.participantCounts.external || 0"
-                               @input="tmpl.participantCounts.external = Number($event.target.value)"
-                               @click.stop />
-                      </td>
-                    </tr>
-                  </table>
-                </div>
-
-                <!-- Interop target + layout -->
-                <div class="field-group">
-                  <label class="field-label">Interop target</label>
-                  <select v-model="tmpl.interopTarget" @click.stop>
-                    <option :value="null">None</option>
-                    <option v-for="(def, key) in ENDPOINT_TYPES" :key="key"
-                            :value="key" :disabled="key === tmpl.endpointType">
-                      {{ def.label }}
-                    </option>
-                  </select>
-
-                  <label class="field-label" style="margin-top:10px">Layout</label>
-                  <select v-model="tmpl.layout" @click.stop>
+                  <label class="field-label">Layout</label>
+                  <select v-model="tmpl.layout">
                     <optgroup label="Adaptive / Teams-like">
                       <option value="adaptive">Adaptive Composition (max 12 video)</option>
                     </optgroup>
@@ -354,52 +336,68 @@
                     </optgroup>
                   </select>
                 </div>
-
+                <div class="field-group">
+                  <label class="field-label">Presentation</label>
+                  <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+                    <label class="toggle" style="display:inline-block">
+                      <input type="checkbox" v-model="tmpl.presentationActive" />
+                      <span class="toggle-slider"></span>
+                    </label>
+                    <span style="font-size:12px;color:var(--pex-text-muted)">
+                      {{ tmpl.presentationActive ? 'Active' : 'Off' }}
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              <!-- Per-meeting summary -->
-              <div class="meeting-summary">
-                <template v-if="meetingResults.find(r => r.id === tmpl.id)?.totalPts > 0">
-                  <span class="int-badge">
-                    {{ (meetingResults.find(r => r.id === tmpl.id)?.totalPts ?? 0)
-                       - (meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) }} internal
-                  </span>
-                  <span class="ext-badge"
-                        v-if="(meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) > 0">
-                    {{ meetingResults.find(r => r.id === tmpl.id)?.extPts }} external
-                  </span>
-                  <span v-if="meetingResults.find(r => r.id === tmpl.id)?.hasCrossLocation"
-                        class="interop-pill"
-                        style="background:var(--warn-amber-bg);color:var(--warn-amber)">
-                    Cross-location → backplane active
-                  </span>
-                  <span v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdPresentation ?? 0) > 0"
-                        class="interop-pill">
-                    Presentation +{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdPresentation ?? 0) }} HD
-                  </span>
-                  <span v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdComposition ?? 0) > 0"
-                        class="interop-pill">
-                    Adaptive comp +{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdComposition ?? 0) }} HD
-                  </span>
-                  <span v-if="(meetingResults.find(r => r.id === tmpl.id)?.audioOverflowPts ?? 0) > 0"
-                        class="interop-pill"
-                        style="background:var(--warn-amber-bg);color:var(--warn-amber)">
-                    {{ meetingResults.find(r => r.id === tmpl.id)?.audioOverflowPts }} over layout limit → audio-only
-                  </span>
+              <!-- ③ Interop summary -->
+              <div class="interop-summary-block" v-if="meetingResults.find(r => r.id === tmpl.id)?.totalPts > 0">
+                <div class="interop-summary-title">Interop Summary</div>
+                <div class="interop-line">
+                  <span>Native ({{ ENDPOINT_TYPES[tmpl.meetingType]?.label }})</span>
+                  <span>{{ meetingResults.find(r => r.id === tmpl.id)?.nativeCount ?? 0 }}</span>
+                </div>
+                <template v-if="meetingResults.find(r => r.id === tmpl.id)?.interopCount > 0">
+                  <div class="interop-line">
+                    <span>Interop</span>
+                    <span>{{ meetingResults.find(r => r.id === tmpl.id)?.interopCount }}</span>
+                  </div>
+                  <div class="interop-line interop-sub"
+                       v-for="(count, type) in meetingResults.find(r => r.id === tmpl.id)?.interopByType"
+                       :key="type">
+                    <span>· {{ ENDPOINT_TYPES[type]?.label ?? type }}</span>
+                    <span>{{ count }}</span>
+                  </div>
                 </template>
-                <span v-else class="text-muted" style="font-size:11px;font-style:italic">
-                  Enter participant counts above to see per-meeting resource usage.
-                </span>
+                <div class="interop-line" style="color:var(--pex-text-muted);border-top:1px dashed #EDF2F7;margin-top:4px;padding-top:4px">
+                  <span>HD per meeting</span>
+                  <span style="color:var(--pex-teal-dark)">{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdTotal ?? 0) }} HD</span>
+                </div>
+                <div class="interop-line" style="color:var(--warn-amber)"
+                     v-if="(meetingResults.find(r => r.id === tmpl.id)?.audioOverflowPts ?? 0) > 0">
+                  <span>Audio-only (over layout limit)</span>
+                  <span>{{ meetingResults.find(r => r.id === tmpl.id)?.audioOverflowPts }}</span>
+                </div>
+                <div class="interop-line" style="color:var(--warn-amber)"
+                     v-if="meetingResults.find(r => r.id === tmpl.id)?.hasCrossLocation">
+                  <span>Cross-location → backplane active</span>
+                  <span></span>
+                </div>
               </div>
+              <div v-else class="no-nodes-hint" style="padding:4px 0">
+                Enter participant counts above to see the interop summary.
+              </div>
+
             </div>
           </div>
 
-          <!-- Footer note when templates exist -->
+          <!-- Footer note + add button -->
           <div v-if="meetingTemplates.length > 0" class="inline-note" style="margin-top:10px">
             <strong>{{ numberOfMeetings }} meeting{{ numberOfMeetings !== 1 ? 's' : '' }} total</strong>
             across {{ meetingTemplates.length }} template{{ meetingTemplates.length !== 1 ? 's' : '' }}.
-            Meeting count per template is capped by the endpoint count assigned to that location.
+            Meeting count is capped by endpoint assignments.
           </div>
+          <button class="btn-add btn-add-location" style="margin-top:8px" @click="addBlankTemplate">＋ Add Template</button>
 
         </div>
       </div>
