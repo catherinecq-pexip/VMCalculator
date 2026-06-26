@@ -356,6 +356,16 @@
           const extPts        = externalCount;
           const extProportion = totalPts > 0 ? extPts / totalPts : 0;
 
+          // Only SIP/H.323 and WebRTC meetings are hosted on Pexip Infinity itself.
+          // For external-hosted meetings (Teams, Google Meet, Zoom, SfB), native participants
+          // of the host platform don't route through Pexip and consume no Pexip HD resources.
+          const PEXIP_NATIVE_TYPES = new Set(['sip_h323', 'webrtc']);
+          const isExternalHosted = !PEXIP_NATIVE_TYPES.has(tmpl.meetingType);
+          const pexipParticipantEndpoints = isExternalHosted
+            ? { ...participantEndpoints, [tmpl.meetingType]: 0 }
+            : participantEndpoints;
+          const pexipPts = Object.values(pexipParticipantEndpoints).reduce((a, b) => a + b, 0);
+
           // Cross-location detection from participant rows
           const locIdsWithPts = new Set(
             (tmpl.participants || [])
@@ -374,16 +384,16 @@
           // Layout-aware video/audio split
           const layoutDef      = C.LAYOUTS[tmpl.layout];
           const maxVideoPts    = layoutDef?.maxVideoParticipants ?? null;
-          const audioOverflow  = maxVideoPts !== null ? Math.max(0, totalPts - maxVideoPts) : 0;
-          const videoFraction  = (maxVideoPts !== null && totalPts > 0)
-            ? Math.min(1, maxVideoPts / totalPts) : 1;
+          const audioOverflow  = maxVideoPts !== null ? Math.max(0, pexipPts - maxVideoPts) : 0;
+          const videoFraction  = (maxVideoPts !== null && pexipPts > 0)
+            ? Math.min(1, maxVideoPts / pexipPts) : 1;
 
           // HD & access bandwidth per endpoint type
           let hdEndpoints = 0, hdPresentation = 0;
           let bwAccessMin = 0, bwAccessMax = 0;
 
           endpointRows.forEach(row => {
-            const typeCount = Number(participantEndpoints[row.type]) || 0;
+            const typeCount = Number(pexipParticipantEndpoints[row.type]) || 0;
             if (!typeCount) return;
             const def         = C.ENDPOINT_TYPES[row.type] ?? {};
             const weight      = C.QUALITY_WEIGHTS[row.quality] ?? 1.0;
@@ -410,11 +420,11 @@
             bwAccessMax += typeCount * bwMax;
           });
 
-          const bwAudioMin = totalPts * C.AUDIO_MIN_KBPS;
-          const bwAudioMax = totalPts * C.AUDIO_MAX_KBPS;
+          const bwAudioMin = pexipPts * C.AUDIO_MIN_KBPS;
+          const bwAudioMax = pexipPts * C.AUDIO_MAX_KBPS;
 
           let bwPresentationMin = 0, bwPresentationMax = 0;
-          if (tmpl.presentationActive && totalPts > 0) {
+          if (tmpl.presentationActive && pexipPts > 0) {
             const pBw = C.PRESENTATION_BW[tmpl.meetingType] ?? C.PRESENTATION_BW.default;
             bwPresentationMin = pBw.min;
             bwPresentationMax = pBw.max;
@@ -437,7 +447,7 @@
           const bwMeetingMax = bwAccessMax + bwAudioMax + bwPresentationMax;
 
           let hdComposition = 0;
-          const videoVisiblePts = maxVideoPts !== null ? Math.min(totalPts, maxVideoPts) : totalPts;
+          const videoVisiblePts = maxVideoPts !== null ? Math.min(pexipPts, maxVideoPts) : pexipPts;
           if (tmpl.layout === 'adaptive' && videoVisiblePts > 0) {
             hdComposition = C.TEAMS_COMPOSITION_HD_BASE
               + Math.max(0, videoVisiblePts - 3) * C.TEAMS_COMPOSITION_HD_ONSTAGE;
@@ -447,7 +457,7 @@
           const gatewayHDPerCall = tmpl.meetingType === 'teams'       ? C.GATEWAY_HD_PER_CALL_TEAMS
                                  : tmpl.meetingType === 'google_meet' ? C.GATEWAY_HD_PER_CALL_GOOGLE_MEET
                                  : 0;
-          const hdGateway = totalPts * gatewayHDPerCall;
+          const hdGateway = pexipPts * gatewayHDPerCall;
 
           // Participants at non-host locations (needed for per-participant gateway backplane)
           const crossLocationPts = (tmpl.participants || [])
