@@ -396,8 +396,13 @@
                 </template>
                 <div style="border-top:1px dashed #EDF2F7;margin-top:4px;padding-top:4px">
                   <div class="interop-line" style="color:var(--pex-text-muted)">
-                    <span>Endpoints HD</span>
-                    <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdEndpoints ?? 0) }} HD</span>
+                    <span>Endpoint HD</span>
+                    <span>{{ fmtHD((meetingResults.find(r => r.id === tmpl.id)?.hdEndpoints ?? 0) + (meetingResults.find(r => r.id === tmpl.id)?.hdGateway ?? 0)) }} HD</span>
+                  </div>
+                  <div class="interop-line interop-sub"
+                       v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdGateway ?? 0) > 0">
+                    <span>· {{ meetingResults.find(r => r.id === tmpl.id)?.meetingType === 'teams' ? 'Teams gateway (+1.5 HD/call)' : 'Google Meet gateway (+1.0 HD/call)' }}</span>
+                    <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdGateway ?? 0) }} HD</span>
                   </div>
                   <div class="interop-line interop-sub"
                        v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdPresentation ?? 0) > 0">
@@ -410,13 +415,8 @@
                     <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdComposition ?? 0) }} HD</span>
                   </div>
                   <div class="interop-line interop-sub"
-                       v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdGateway ?? 0) > 0">
-                    <span>· Gateway overhead</span>
-                    <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdGateway ?? 0) }} HD</span>
-                  </div>
-                  <div class="interop-line interop-sub"
                        v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdBackplane ?? 0) > 0">
-                    <span>· Backplane ({{ (meetingResults.find(r => r.id === tmpl.id)?.crossLocationCount ?? 0) + 1 }} node{{ (meetingResults.find(r => r.id === tmpl.id)?.crossLocationCount ?? 0) > 0 ? 's' : '' }})</span>
+                    <span>· Backplane ({{ (meetingResults.find(r => r.id === tmpl.id)?.crossLocationCount ?? 0) + 1 + ((meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) > 0 ? 1 : 0) }} node{{ ((meetingResults.find(r => r.id === tmpl.id)?.crossLocationCount ?? 0) + ((meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) > 0 ? 1 : 0)) > 0 ? 's' : '' }})</span>
                     <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdBackplane ?? 0) }} HD</span>
                   </div>
                   <div class="interop-line" style="color:var(--pex-teal-dark);font-weight:600">

@@ -454,17 +454,16 @@
             .filter(p => Number(p.count) > 0 && p.locationId && p.locationId !== hostId)
             .reduce((a, p) => a + Number(p.count), 0);
 
-          // Per-meeting backplane HD — mirrors the aggregate backplaneHD logic
-          const isGatewayMeeting = tmpl.meetingType === 'teams' || tmpl.meetingType === 'google_meet';
-          const bpHDPerMeeting   = tmpl.meetingType === 'teams' ? C.BACKPLANE_HD_TEAMS : C.BACKPLANE_HD_PER_MEETING;
+          // Per-meeting backplane HD — per Pexip docs:
+          // Every conference on every node in a multi-node deployment reserves 1 HD.
+          // Each topology location = one node. All meeting types use the same rule;
+          // Teams/Google Meet gateway costs are separate (hdGateway above).
+          const isMultiNodeDeployment = locations.length > 1;
           let hdBackplane = 0;
-          if (hasCrossLocation || extPts > 0) {
-            if (isGatewayMeeting) {
-              if (hasCrossLocation) hdBackplane = crossLocationPts * bpHDPerMeeting;
-            } else {
-              if (hasCrossLocation) hdBackplane = (crossLocationCount + 1) * bpHDPerMeeting;
-              if (extPts > 0) hdBackplane += bpHDPerMeeting;
-            }
+          if (isMultiNodeDeployment) {
+            const nodeCount = hasCrossLocation ? (crossLocationCount + 1) : 1;
+            hdBackplane = nodeCount * C.BACKPLANE_HD_PER_MEETING;
+            if (extPts > 0) hdBackplane += C.BACKPLANE_HD_PER_MEETING; // proxy = extra node boundary
           }
 
           const hdTotal = hdEndpoints + hdPresentation + hdComposition + hdGateway;

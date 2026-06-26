@@ -34,8 +34,8 @@ The calculation model is grounded in Pexip's published capacity planning methodo
 
 - **HD equivalence** — Full HD (1080p) costs 2.0 HD; SD costs 0.5 HD; audio costs 0.0625 HD. This reduces heterogeneous endpoint mixes to a single scalar for node sizing.
 - **Per-platform connection factors** — SIP/H.323 = 1.0×, Zoom = 1.0×, WebRTC VP8 = 1.0×, WebRTC VP9 = 1.25× (via codec factor), Microsoft Teams = 1.5× (minimum 1.5 HD per connection at any quality), Google Meet = 1.0×, Skype for Business = 1.0×.
-- **Gateway call overhead** — When the meeting type is a cloud gateway (Teams or Google Meet), Pexip creates one gateway call leg per participant to the external platform. Each leg carries a fixed HD overhead on the hosting transcoding node: Teams Connector = 1.5 HD/call, Google Meet connection = 1.0 HD/call. This is applied per participant and is independent of endpoint quality.
-- **Backplane model (per Pexip docs)** — Every transcoding node hosting a conference reserves a fixed 1 HD for the backplane, regardless of participant count. For Teams gateway meetings, this reservation is 1.5 HD per node. Backplane costs are topology-driven: they activate when participants span multiple locations (`hasCrossLocation`) or when external participants are present (proxy boundary). For regular VMR, backplane scales per participating node; for gateway meetings, it scales per cross-location participant (each call independently crosses the node boundary).
+- **Gateway call overhead** — When the meeting type is a cloud gateway (Teams or Google Meet), Pexip creates one gateway call leg per participant to the external platform. Each leg carries a fixed HD overhead on the hosting transcoding node, in addition to the participant's endpoint HD: Teams Connector = 1.5 HD/call, Google Meet connection = 1.0 HD/call. These are shown grouped under "Endpoint HD" in the interop summary. This cost is independent of endpoint quality and applies to all participants regardless of location.
+- **Backplane model (per Pexip docs)** — Every transcoding node in a multi-node deployment reserves a fixed **1 HD per conference** for backplane, even if the conference is not distributed. Each topology location is treated as a separate node. Single-location deployments (one location defined) have no backplane reservation. For distributed meetings, each additional participating location adds 1 HD: `(crossLocationCount + 1) × 1 HD`. External participants always imply a proxy node boundary (+1 HD). This model is identical for all meeting types — Teams and Google Meet gateway meetings use the same standard 1 HD backplane; their gateway leg costs (1.5 HD or 1.0 HD per call) are tracked separately in the gateway overhead component.
 - **Proxy node load** — Proxy/Edge nodes forward external calls without transcoding. Each forwarded call consumes approximately 0.2 HD on the proxy node. This demand is tracked separately from transcoding node HD and shown in node recommendations.
 - **VP9 resource trade-off** — VP9 reduces bandwidth by ~33% compared to H.264 at the same resolution, but increases node CPU load by 25% (`VP9_RESOURCE_FACTOR = 1.25`).
 - **Teams Adaptive Composition** — When the Adaptive/Teams-like layout is active and participants are present, an additional HD reservation is made per conference: +1.0 HD for up to 3 on-stage participants, plus +0.5 HD per on-stage participant beyond 3. This is separate from the Teams Connector gateway overhead.
@@ -106,9 +106,6 @@ hasCrossLocation = true  if:
   - host location is null and any located participants exist
 
 crossLocationCount = max(0, nonHostLocs.length)   ← non-host locations with participants
-
-crossLocationPts   = sum of participant counts at non-host locations
-                     ← used for per-participant backplane in gateway meetings
 ```
 
 **2c — HD per endpoint type:**
@@ -170,43 +167,39 @@ This cost is fixed per call regardless of endpoint quality, and is separate from
 
 **2f — Per-meeting backplane HD:**
 
-Backplane cost is topology-driven and independent of node configuration. It activates when participants span locations or external participants are present.
+Backplane cost is topology-driven. Each topology location is treated as a separate node. The same rule applies to all meeting types — gateway overhead (Teams/Google Meet) is a separate component.
 
 ```
-isGateway  = meetingType is 'teams' or 'google_meet'
-bpHD       = BACKPLANE_HD_TEAMS (1.5)   if meetingType === 'teams'
-             BACKPLANE_HD_PER_MEETING (1.0)   otherwise
+isMultiNodeDeployment = locations.length > 1
 
-if hasCrossLocation OR extPts > 0:
+if isMultiNodeDeployment:
+  nodeCount   = (crossLocationCount + 1)   if hasCrossLocation   else 1
+  hdBackplane = nodeCount × BACKPLANE_HD_PER_MEETING   (1.0 HD per node, fixed)
+  hdBackplane += BACKPLANE_HD_PER_MEETING   if extPts > 0   (proxy = extra node boundary)
 
-  Gateway meetings (Teams / Google Meet):
-    hdBackplane = crossLocationPts × bpHD   if hasCrossLocation   else 0
-    (gateway overhead already captures the external participant cost in hdGateway)
-
-  Regular VMR:
-    hdBackplane = (crossLocationCount + 1) × bpHD   if hasCrossLocation   else 0
-    hdBackplane += bpHD   if extPts > 0   (proxy node boundary, always implied by external participants)
+else:   (single location = single-node deployment)
+  hdBackplane = 0
 ```
 
-**Backplane model by scenario (regular VMR, per meeting):**
+**Backplane model by scenario (all meeting types, per meeting):**
 
-| Scenario | Nodes | hdBackplane |
+| Scenario | Topology | hdBackplane |
 |---|---|---|
-| All participants at host location, internal only | 1 | 0 HD (no cross-location, no external) |
-| All participants at one remote location (not host) | 2 | 2.0 HD |
-| Participants at host + 1 remote location | 2 | 2.0 HD |
-| Participants at host + 2 remote locations | 3 | 3.0 HD |
-| External participants only (no cross-location internal) | 1 + proxy | 1.0 HD (proxy boundary) |
-| Cross-location + external | N + proxy | (N+1) × 1.0 + 1.0 HD |
+| Single location defined | 1 location | 0 HD (single-node, no backplane) |
+| Single-location meeting, multi-location topology | ≥2 locations | 1.0 HD (base reservation, non-distributed) |
+| Host + 1 remote location | ≥2 locations | 2.0 HD |
+| Host + 2 remote locations | ≥2 locations | 3.0 HD |
+| External participants only (no cross-location) | ≥2 locations | 2.0 HD (host node + proxy boundary) |
+| Cross-location + external participants | ≥2 locations | (N+1) × 1.0 + 1.0 HD |
 
-For Teams gateway meetings, the 1.5 HD cost applies per cross-location participant, not per node.
+Teams and Google Meet gateway meetings use the same backplane values. Their gateway leg costs (1.5 HD or 1.0 HD per call) are accounted for separately in `hdGateway`.
 
 **2g — Per-meeting HD total:**
 ```
 hdTotal = hdEndpoints + hdPresentation + hdComposition + hdGateway
 ```
 
-Note: `hdBackplane` is tracked separately from `hdTotal` and combined in the interop summary display. The aggregate `backplaneHD` is `sum(hdBackplaneAll)` over all templates.
+`hdBackplane` is tracked separately from `hdTotal` and displayed as its own line in the interop summary. The aggregate `backplaneHD = sum(hdBackplaneAll)` across all templates.
 
 **Effective meeting count and aggregate:**
 ```
@@ -216,21 +209,25 @@ hdTotalAll      = hdTotal      × effectiveCount
 hdBackplaneAll  = hdBackplane  × effectiveCount
 ```
 
-**Example — Teams gateway, cross-location, 3 SIP participants (1 at host, 2 remote), 10 meetings:**
+**Example — Teams gateway, cross-location, 3 SIP participants (1 at host, 2 remote), multi-location topology, 10 meetings:**
 ```
 hdEndpoints   = 3 × 1.0 = 3.0 HD   (SIP/H.264 at 720p)
-hdGateway     = 3 × 1.5 = 4.5 HD   (Teams Connector, 1.5 HD/call)
+hdGateway     = 3 × 1.5 = 4.5 HD   (Teams Connector, 1.5 HD/call per participant)
 hdComposition = 0                   (not adaptive layout)
 hdPresentation= 0                   (presentation off)
 
 hdTotal       = 3.0 + 4.5 = 7.5 HD  per meeting
 
-crossLocationPts = 2 (two participants at non-host location)
-hdBackplane   = 2 × 1.5 = 3.0 HD   (Teams per-participant cross-location backplane)
+Interop summary "Endpoint HD" = hdEndpoints + hdGateway = 7.5 HD
+  · Teams gateway (+1.5 HD/call) = 4.5 HD
 
-Total per meeting shown in interop summary = 7.5 + 3.0 = 10.5 HD
+isMultiNodeDeployment = true (multiple locations)
+nodeCount   = crossLocationCount + 1 = 1 + 1 = 2
+hdBackplane = 2 × 1.0 = 2.0 HD   (standard Pexip inter-node backplane, all meeting types)
+
+Total per meeting = hdTotal + hdBackplane = 7.5 + 2.0 = 9.5 HD
 hdTotalAll    = 7.5 × 10  = 75 HD
-hdBackplaneAll= 3.0 × 10  = 30 HD
+hdBackplaneAll= 2.0 × 10  = 20 HD
 ```
 
 **2h — Bandwidth per meeting (min / max range):**
@@ -315,21 +312,26 @@ This includes endpoint HD, presentation, composition, and gateway overhead — b
 backplaneHD = sum(hdBackplaneAll  for all templates)
 ```
 
-Each template's `hdBackplaneAll` is computed in Step 2f and aggregated here. The formula covers three distinct scenarios per Pexip's resource allocation documentation:
+Each template's `hdBackplaneAll` is computed in Step 2f and aggregated here. One unified formula covers all meeting types:
 
-| Scenario | Formula |
-|---|---|
-| Regular VMR, cross-location | `(crossLocationCount + 1) × 1.0 HD × meetingCount` |
-| Regular VMR, external participants | `+1.0 HD × meetingCount` (proxy boundary) |
-| Teams gateway, cross-location | `crossLocationPts × 1.5 HD × meetingCount` |
-| Google Meet gateway, cross-location | `crossLocationPts × 1.0 HD × meetingCount` |
-| Single-location, internal only | 0 |
+```
+backplaneHD = sum over all templates:
+  if locations.length > 1 (multi-node deployment):
+    nodeCount  = (crossLocationCount + 1)   if hasCrossLocation   else 1
+    hdBackplane = nodeCount × 1.0 HD
+    hdBackplane += 1.0 HD   if extPts > 0   (proxy boundary)
+  else:
+    hdBackplane = 0
+```
 
-Key constants:
-```
-BACKPLANE_HD_PER_MEETING = 1.0 HD   (standard per-node reservation)
-BACKPLANE_HD_TEAMS       = 1.5 HD   (Teams gateway per-participant backplane)
-```
+| Topology | Scenario | hdBackplane per meeting |
+|---|---|---|
+| 1 location | Any meeting | 0 HD (single-node) |
+| ≥2 locations | Single-location meeting | 1.0 HD (base reservation) |
+| ≥2 locations | Distributed (N nodes) | (N) × 1.0 HD |
+| ≥2 locations | External participants added | +1.0 HD (proxy boundary) |
+
+Key constant: `BACKPLANE_HD_PER_MEETING = 1.0 HD` — applies identically to regular VMR, Teams gateway, and Google Meet gateway meetings.
 
 ---
 
@@ -450,18 +452,19 @@ totalBandwidthMax = meetingBandwidthMax + backplaneBandwidthMax + proxyBandwidth
 
 ### Step 9 — Topology and routing model
 
-**Meeting Builder independence:** All resource calculations in the Meeting Builder (Steps 2–4) are topology-driven. They do not depend on what nodes have been defined in the hardware section. Backplane activates from participant location assignments; proxy bandwidth activates from external participant counts.
+**Meeting Builder independence:** All resource calculations in the Meeting Builder (Steps 2–4) are topology-driven. They do not depend on what nodes have been defined in the hardware section. Backplane activates from the number of topology locations and participant location assignments; proxy bandwidth activates from external participant counts. Each topology location is treated as one distinct transcoding node.
 
 **Routing scenarios:**
 
 | Scenario | Effect |
 |---|---|
-| All participants at host location, no external | No backplane HD; no proxy bandwidth |
-| Host at Location A, participants at Location B | hasCrossLocation = true → backplane fires |
-| Participants span N non-host locations | `(N+1) × 1 HD` backplane per regular VMR meeting |
-| External participants | Proxy bandwidth tracked; +1 HD proxy boundary for regular VMR |
-| Teams gateway meeting | 1.5 HD/call gateway overhead; 1.5 HD per cross-location participant backplane |
-| Google Meet gateway meeting | 1.0 HD/call gateway overhead; 1.0 HD per cross-location participant backplane |
+| Only 1 location defined | Single-node deployment — no backplane for any meeting |
+| ≥2 locations defined, all participants at host location | 1 HD base backplane reserved (non-distributed, multi-node) |
+| Host at Location A, participants at Location B | `hasCrossLocation = true` → 2 HD backplane (2 nodes) |
+| Participants span N additional locations | `(N+1) × 1 HD` backplane |
+| External participants | +1 HD proxy boundary; proxy bandwidth tracked from `extPts > 0` |
+| Teams gateway meeting | 1.5 HD/call gateway overhead (`hdGateway`) + standard 1 HD/node backplane |
+| Google Meet gateway meeting | 1.0 HD/call gateway overhead (`hdGateway`) + standard 1 HD/node backplane |
 
 ---
 
