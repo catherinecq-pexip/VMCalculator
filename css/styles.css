@@ -1160,7 +1160,8 @@ footer a:hover { text-decoration: underline; }
 
 /* ── Endpoint Pool Allocation panel ────────────────────────────────────────── */
 .pool-allocation-panel {
-  margin-top: 14px;
+  margin-top: 4px;
+  margin-bottom: 14px;
   border: 1px solid var(--pex-border);
   border-radius: 8px;
   overflow: hidden;

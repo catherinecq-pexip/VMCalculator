@@ -710,7 +710,7 @@
       });
 
       // ── lookup tables exposed to template ─────────────────────────────────
-      const EFFICIENCY_BASE = { legacy: 2.5, avx2: 4.0, avx512: 6.0 };
+      const EFFICIENCY_BASE = { avx2: 4.0, avx512: 6.0 };
       const HV_FACTORS      = { vmware: 1.0, kvm: 0.95, hyperv: 0.90, cloud: 1.0 };
       const CPU_MIN_CLOCK   = C.CPU_MIN_CLOCK_GHZ;
 

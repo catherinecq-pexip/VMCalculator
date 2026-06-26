@@ -141,7 +141,6 @@ window.PEXIP = {
   // Base HD connections per vCPU by instruction set (reference clock: 2.8 GHz)
   // Calibrated from Pexip NUMA docs: Xeon Gold 6342 (AVX-512, 2.8 GHz) ≈ 195 HD / 2 nodes / 16 vCPU each
   CPU_EFFICIENCY_TABLE: {
-    legacy: 2.5,
     avx2:   4.0,
     avx512: 6.0,
   },
