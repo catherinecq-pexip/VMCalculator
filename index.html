@@ -290,7 +290,7 @@
                      min="0" step="1" placeholder="1"
                      @click.stop style="width:52px;text-align:center;margin:0 4px" />
               <span class="meeting-hd-badge" style="margin-left:6px">
-                {{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdTotal ?? 0) }} HD each
+                {{ fmtHD((meetingResults.find(r => r.id === tmpl.id)?.hdTotal ?? 0) + (meetingResults.find(r => r.id === tmpl.id)?.hdBackplane ?? 0)) }} HD each
               </span>
               <button class="btn-duplicate" @click.stop="duplicateTemplate(tmpl.id)" title="Duplicate template">⧉</button>
               <button class="btn-remove" @click.stop="removeMeetingTemplate(tmpl.id)" title="Remove template">✕</button>
@@ -394,19 +394,40 @@
                     <span>{{ count }}</span>
                   </div>
                 </template>
-                <div class="interop-line" style="color:var(--pex-text-muted);border-top:1px dashed #EDF2F7;margin-top:4px;padding-top:4px">
-                  <span>HD per meeting</span>
-                  <span style="color:var(--pex-teal-dark)">{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdTotal ?? 0) }} HD</span>
+                <div style="border-top:1px dashed #EDF2F7;margin-top:4px;padding-top:4px">
+                  <div class="interop-line" style="color:var(--pex-text-muted)">
+                    <span>Endpoints HD</span>
+                    <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdEndpoints ?? 0) }} HD</span>
+                  </div>
+                  <div class="interop-line interop-sub"
+                       v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdPresentation ?? 0) > 0">
+                    <span>· Presentation</span>
+                    <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdPresentation ?? 0) }} HD</span>
+                  </div>
+                  <div class="interop-line interop-sub"
+                       v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdComposition ?? 0) > 0">
+                    <span>· Composition</span>
+                    <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdComposition ?? 0) }} HD</span>
+                  </div>
+                  <div class="interop-line interop-sub"
+                       v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdGateway ?? 0) > 0">
+                    <span>· Gateway overhead</span>
+                    <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdGateway ?? 0) }} HD</span>
+                  </div>
+                  <div class="interop-line interop-sub"
+                       v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdBackplane ?? 0) > 0">
+                    <span>· Backplane ({{ (meetingResults.find(r => r.id === tmpl.id)?.crossLocationCount ?? 0) + 1 }} node{{ (meetingResults.find(r => r.id === tmpl.id)?.crossLocationCount ?? 0) > 0 ? 's' : '' }})</span>
+                    <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdBackplane ?? 0) }} HD</span>
+                  </div>
+                  <div class="interop-line" style="color:var(--pex-teal-dark);font-weight:600">
+                    <span>Total HD per meeting</span>
+                    <span>{{ fmtHD((meetingResults.find(r => r.id === tmpl.id)?.hdTotal ?? 0) + (meetingResults.find(r => r.id === tmpl.id)?.hdBackplane ?? 0)) }} HD</span>
+                  </div>
                 </div>
                 <div class="interop-line" style="color:var(--warn-amber)"
                      v-if="(meetingResults.find(r => r.id === tmpl.id)?.audioOverflowPts ?? 0) > 0">
                   <span>Audio-only (over layout limit)</span>
                   <span>{{ meetingResults.find(r => r.id === tmpl.id)?.audioOverflowPts }}</span>
-                </div>
-                <div class="interop-line" style="color:var(--warn-amber)"
-                     v-if="meetingResults.find(r => r.id === tmpl.id)?.hasCrossLocation">
-                  <span>Cross-location → backplane active</span>
-                  <span></span>
                 </div>
               </div>
               <div v-else class="no-nodes-hint" style="padding:4px 0">

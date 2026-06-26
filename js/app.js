@@ -421,7 +421,7 @@
           }
 
           let bwBackplaneMin = 0, bwBackplaneMax = 0;
-          if (hasCrossLocation && totalDefinedTranscodingNodes.value > 1) {
+          if (hasCrossLocation) {
             const lp = C.LAYOUTS[tmpl.layout]?.backplane ?? { hd: 1, thumb: 0 };
             bwBackplaneMin = lp.hd * C.BACKPLANE_HD_MIN_KBPS + lp.thumb * C.BACKPLANE_THUMB_MIN_KBPS;
             bwBackplaneMax = lp.hd * C.BACKPLANE_HD_MAX_KBPS + lp.thumb * C.BACKPLANE_THUMB_MAX_KBPS;
@@ -431,8 +431,8 @@
             }
           }
 
-          const bwProxyMin = (viaProxy.value && extPts > 0) ? Math.round(bwAccessMin * extProportion) : 0;
-          const bwProxyMax = (viaProxy.value && extPts > 0) ? Math.round(bwAccessMax * extProportion) : 0;
+          const bwProxyMin = extPts > 0 ? Math.round(bwAccessMin * extProportion) : 0;
+          const bwProxyMax = extPts > 0 ? Math.round(bwAccessMax * extProportion) : 0;
           const bwMeetingMin = bwAccessMin + bwAudioMin + bwPresentationMin;
           const bwMeetingMax = bwAccessMax + bwAudioMax + bwPresentationMax;
 
@@ -443,7 +443,31 @@
               + Math.max(0, videoVisiblePts - 3) * C.TEAMS_COMPOSITION_HD_ONSTAGE;
           }
 
-          const hdTotal = hdEndpoints + hdPresentation + hdComposition;
+          // Gateway overhead: Teams Connector or Google Meet connection cost per active call
+          const gatewayHDPerCall = tmpl.meetingType === 'teams'       ? C.GATEWAY_HD_PER_CALL_TEAMS
+                                 : tmpl.meetingType === 'google_meet' ? C.GATEWAY_HD_PER_CALL_GOOGLE_MEET
+                                 : 0;
+          const hdGateway = totalPts * gatewayHDPerCall;
+
+          // Participants at non-host locations (needed for per-participant gateway backplane)
+          const crossLocationPts = (tmpl.participants || [])
+            .filter(p => Number(p.count) > 0 && p.locationId && p.locationId !== hostId)
+            .reduce((a, p) => a + Number(p.count), 0);
+
+          // Per-meeting backplane HD — mirrors the aggregate backplaneHD logic
+          const isGatewayMeeting = tmpl.meetingType === 'teams' || tmpl.meetingType === 'google_meet';
+          const bpHDPerMeeting   = tmpl.meetingType === 'teams' ? C.BACKPLANE_HD_TEAMS : C.BACKPLANE_HD_PER_MEETING;
+          let hdBackplane = 0;
+          if (hasCrossLocation || extPts > 0) {
+            if (isGatewayMeeting) {
+              if (hasCrossLocation) hdBackplane = crossLocationPts * bpHDPerMeeting;
+            } else {
+              if (hasCrossLocation) hdBackplane = (crossLocationCount + 1) * bpHDPerMeeting;
+              if (extPts > 0) hdBackplane += bpHDPerMeeting;
+            }
+          }
+
+          const hdTotal = hdEndpoints + hdPresentation + hdComposition + hdGateway;
           const loc = locations.find(l => l.id === tmpl.hostLocationId);
 
           // Interop summary
@@ -480,11 +504,16 @@
             hdEndpoints,
             hdPresentation,
             hdComposition,
+            hdGateway,
+            hdBackplane,
             hdTotal,
             hdTotalAll:        hdTotal        * effectiveCount,
             hdEndpointsAll:    hdEndpoints    * effectiveCount,
             hdPresentationAll: hdPresentation * effectiveCount,
             hdCompositionAll:  hdComposition  * effectiveCount,
+            hdGatewayAll:      hdGateway      * effectiveCount,
+            hdBackplaneAll:    hdBackplane    * effectiveCount,
+            crossLocationPts,
             hasCrossLocation,
             crossLocationCount,
             bwAccessMin, bwAccessMax,
@@ -517,14 +546,16 @@
         meetingResults.value.reduce((a, r) => a + r.hdTotalAll, 0)
       );
 
-      // ── step 4: backplane — per-template cross-location detection ─────────
-      const backplaneHD = computed(() => {
-        if (totalDefinedTranscodingNodes.value <= 1) return 0;
-        return meetingResults.value.reduce((a, r) =>
-          a + (r.hasCrossLocation
-            ? (r.crossLocationCount + 1) * C.BACKPLANE_HD_PER_MEETING * r.meetingQualityWeight * r.count
-            : 0), 0);
-      });
+      // ── step 4: backplane — aggregated from per-meeting hdBackplaneAll ───────
+      const backplaneHD = computed(() =>
+        meetingResults.value.reduce((a, r) => a + r.hdBackplaneAll, 0)
+      );
+
+      // HD load on proxy/edge nodes from forwarded external calls (not added to transcoding demand)
+      const proxyHDDemand = computed(() =>
+        meetingResults.value.reduce((a, r) =>
+          a + r.extPts * C.BACKPLANE_HD_PROXY_PER_CALL * r.count, 0)
+      );
 
       // ── step 5: total + headroom ──────────────────────────────────────────
       const totalHDRaw          = computed(() => totalHDBeforeBackplane.value + backplaneHD.value);
@@ -542,7 +573,9 @@
       // ── step 7: vCPU + node count ─────────────────────────────────────────
       const vCPURequired = computed(() => Math.ceil(totalHDWithHeadroom.value));
       // Node count is hardware-derived (floor(total_cores / 22)), not HD-derived
-      const transcodingNodeCount = computed(() => recommendedNodeCount.value);
+      const transcodingNodeCount = computed(() =>
+        Math.max(1, Math.ceil(vCPURequired.value / vCPUPerNode.value))
+      );
       const proxyNodeCount = computed(() =>
         totalDefinedProxyNodes.value + totalDefinedExternalNodes.value
       );
@@ -695,7 +728,7 @@
           rows.push({
             type: 'Proxy / Edge', location: null,
             count: totalDefinedProxyNodes.value, vcpu: C.PROXY_NODE_VCPU, ram: C.PROXY_NODE_VCPU,
-            note: 'DMZ-facing, forwards media to transcoding nodes',
+            note: `DMZ-facing, forwards media to transcoding nodes — ${fmtHD(proxyHDDemand.value)} HD demand across proxy nodes`,
           });
         }
         if (totalDefinedExternalNodes.value > 0) {
@@ -761,6 +794,7 @@
         totalHDRaw,
         totalHDWithHeadroom,
         backplaneHD,
+        proxyHDDemand,
         effectiveHDperVcpu,
         vCPURequired,
         transcodingNodeCount,

@@ -171,6 +171,13 @@ window.PEXIP = {
 
   // Backplane HD reservation per active meeting per transcoding node
   BACKPLANE_HD_PER_MEETING: 1.0,
+  // Teams gateway backplane costs more than standard (per Pexip docs)
+  BACKPLANE_HD_TEAMS: 1.5,
+  // HD load on a proxy/edge node per forwarded external call
+  BACKPLANE_HD_PROXY_PER_CALL: 0.2,
+  // Per-call gateway overhead on the hosting transcoding node (Teams Connector / Google Meet connection)
+  GATEWAY_HD_PER_CALL_TEAMS:       1.5,
+  GATEWAY_HD_PER_CALL_GOOGLE_MEET: 1.0,
 
   // Endpoint type definitions
   ENDPOINT_TYPES: {
