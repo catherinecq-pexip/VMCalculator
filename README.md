@@ -38,6 +38,7 @@ The calculation model is grounded in Pexip's published capacity planning methodo
 - **Backplane model (per Pexip docs)** — Every transcoding node in a multi-node deployment reserves a fixed **1 HD per conference** for backplane, even if the conference is not distributed. Each topology location is treated as a separate node. Single-location deployments (one location defined) have no backplane reservation. For distributed meetings, each additional participating location adds 1 HD: `(crossLocationCount + 1) × 1 HD`. External participants always imply a proxy node boundary (+1 HD). This model is identical for all meeting types — Teams and Google Meet gateway meetings use the same standard 1 HD backplane; their gateway leg costs (1.5 HD or 1.0 HD per call) are tracked separately in the gateway overhead component.
 - **Proxy node load** — Proxy/Edge nodes forward external calls without transcoding. Each forwarded call consumes approximately 0.2 HD on the proxy node. This demand is tracked separately from transcoding node HD and shown in node recommendations.
 - **VP9 resource trade-off** — VP9 reduces bandwidth by ~33% compared to H.264 at the same resolution, but increases node CPU load by 25% (`VP9_RESOURCE_FACTOR = 1.25`).
+- **Presentation overhead** — When content is shared in a meeting, each Pexip-routed participant incurs a per-participant HD overhead on the transcoding node (`presentationHD × typeCount`, applied when `presentationActive` is enabled). Overhead by endpoint type: SIP/H.323 = 0.5 HD, Zoom = 0.5 HD, WebRTC = 1.0 HD, Microsoft Teams = 0.5 HD, Google Meet = 1.0 HD, Skype for Business = 1.0 HD.
 - **Teams Adaptive Composition** — When the Adaptive/Teams-like layout is active and participants are present, an additional HD reservation is made per conference: +1.0 HD for up to 3 on-stage participants, plus +0.5 HD per on-stage participant beyond 3. This is separate from the Teams Connector gateway overhead.
 - **Host-native participant exclusion** — For meetings hosted on external platforms (Teams, Google Meet, Zoom, Skype for Business), native participants of the host platform don't route through Pexip Infinity and consume no Pexip HD or bandwidth resources. Only interop participants whose media path traverses Pexip count toward endpoint HD, gateway overhead, composition overhead, audio bandwidth, and presentation bandwidth. Pexip-native meeting types (SIP/H.323, WebRTC) are unaffected — all participants count.
 - **Template-driven resources** — Resources are consumed only during active conferences. Each template's per-meeting HD/BW cost is computed once and multiplied by the template's meeting count to produce aggregate totals.
@@ -76,8 +77,8 @@ bwPerStream  = BANDWIDTH_TABLE[quality + '-' + codec]
 
 | Endpoint | `connectionFactor` | `minConnectionHD` | Default codec | Presentation overhead |
 |---|---|---|---|---|
-| SIP / H.323 | 1.0 | — | H.264 | — |
-| Zoom | 1.0 | — | H.264 | — |
+| SIP / H.323 | 1.0 | — | H.264 | +0.5 HD/participant |
+| Zoom | 1.0 | — | H.264 | +0.5 HD/participant |
 | WebRTC | 1.0 (VP8) / applies VP9 codecFactor | — | VP8 or VP9 | +1.0 HD/participant |
 | Microsoft Teams | 1.5 | 1.5 HD | MS / H.264 | +0.5 HD/participant |
 | Google Meet | 1.0 | — | VP8 | +1.0 HD/participant |
@@ -220,7 +221,7 @@ hdTotal = hdEndpoints + hdPresentation + hdComposition + hdGateway
 
 **Effective meeting count and aggregate:**
 ```
-effectiveCount = min(meetingCount, poolAssigned)   (capped by endpoint pool)
+effectiveCount = meetingCount   (user-controlled; pool over-commitment is shown as a warning, not a hard cap)
 
 hdTotalAll      = hdTotal      × effectiveCount
 hdBackplaneAll  = hdBackplane  × effectiveCount

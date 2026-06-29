@@ -184,7 +184,8 @@ window.PEXIP = {
     sip_h323: {
       label:             'SIP / H.323',
       connectionFactor:  1.0,
-      presentationExtra: false,
+      presentationExtra: true,
+      presentationHD:    0.5,
     },
     webrtc: {
       label:             'WebRTC',
@@ -195,7 +196,8 @@ window.PEXIP = {
     zoom: {
       label:             'Zoom',
       connectionFactor:  1.0,
-      presentationExtra: false,
+      presentationExtra: true,
+      presentationHD:    0.5,
     },
     teams: {
       label:             'Microsoft Teams',
