@@ -309,14 +309,18 @@
                   <option v-for="loc in locations" :key="loc.id" :value="loc.id">{{ loc.name || 'Unnamed' }}</option>
                 </select>
               </div>
-              <!-- External participants -->
-              <div class="participant-type-row participant-type-external">
+              <!-- External participants (zero or more rows) -->
+              <div v-for="(ep, idx) in tmpl.externalParticipants" :key="idx"
+                   class="participant-type-row participant-type-external">
                 <span class="participant-type-label" style="color:var(--pex-text-muted)">External</span>
-                <input type="number" v-model.number="tmpl.externalCount" min="0" placeholder="0" style="width:65px;flex-shrink:0" />
-                <select v-model="tmpl.externalEndpointType" style="flex:1;min-width:90px">
+                <input type="number" v-model.number="ep.count" min="0" placeholder="0" style="width:65px;flex-shrink:0" />
+                <select v-model="ep.endpointType" style="flex:1;min-width:90px">
                   <option v-for="(def, key) in ENDPOINT_TYPES" :key="key" :value="key">{{ def.label }}</option>
                 </select>
+                <button @click="removeExternalParticipant(tmpl.id, idx)"
+                        class="btn-remove" title="Remove external row" style="margin-left:4px">✕</button>
               </div>
+              <button @click="addExternalParticipant(tmpl.id)" class="btn-add-external">+ Add external participant</button>
 
               <div class="section-divider" style="margin:12px 0"></div>
 

@@ -128,13 +128,27 @@
       // ── meeting builder — template-based auto-generation ──────────────────
       const meetingTemplates = reactive([]);
 
+      // Pick the best default location for an endpoint type given a host location context.
+      // Prefers the host location if it has any of this type assigned; otherwise the
+      // location with the highest assignment count; null if no location has any.
+      function defaultLocationForType(type, hostLocationId) {
+        const hostLoc = locations.find(l => l.id === hostLocationId);
+        if (hostLoc && Number(hostLoc.endpointAssignments?.[type]) > 0) return hostLocationId;
+        let best = null, bestCount = 0;
+        locations.forEach(l => {
+          const n = Number(l.endpointAssignments?.[type]) || 0;
+          if (n > bestCount) { bestCount = n; best = l.id; }
+        });
+        return best;
+      }
+
       // Build participant rows for a new template (one row per active endpoint type)
       function buildParticipantRows(meetingType, hostLocationId) {
         return endpointRows
           .filter(r => Number(r.count) > 0)
           .map(r => ({
             endpointType: r.type,
-            locationId: r.type === meetingType ? hostLocationId : null,
+            locationId: defaultLocationForType(r.type, hostLocationId),
             count: 0,
           }));
       }
@@ -215,8 +229,7 @@
                 meetingType: k.endpointType,
                 hostLocationId: k.locationId,
                 participants: buildParticipantRows(k.endpointType, k.locationId),
-                externalCount: 0,
-                externalEndpointType: endpointRows.find(r => Number(r.count) > 0)?.type || 'sip_h323',
+                externalParticipants: [],
                 layout: '1+7',
                 presentationActive: true,
                 meetingCount: 1,
@@ -239,11 +252,29 @@
             }
             activeTypes.forEach(type => {
               if (!tmpl.participants.find(p => p.endpointType === type)) {
-                tmpl.participants.push({ endpointType: type, locationId: null, count: 0 });
+                tmpl.participants.push({ endpointType: type, locationId: defaultLocationForType(type, tmpl.hostLocationId), count: 0 });
               }
             });
           });
         }
+      );
+
+      // When topology assignments change, fill any participant rows still showing null.
+      // Runs in the same Vue flush cycle as the auto-generate watch, so newly created
+      // templates are also healed. Only null rows are touched — user-set locations are preserved.
+      watch(
+        () => locations.map(l => l.endpointAssignments),
+        () => {
+          meetingTemplates.forEach(tmpl => {
+            tmpl.participants.forEach(p => {
+              if (p.locationId === null) {
+                const best = defaultLocationForType(p.endpointType, tmpl.hostLocationId);
+                if (best !== null) p.locationId = best;
+              }
+            });
+          });
+        },
+        { deep: true }
       );
 
       function duplicateTemplate(id) {
@@ -254,6 +285,7 @@
           id: Date.now() + Math.floor(Math.random() * 1000),
           _autoKey: false,
           participants: orig.participants.map(p => ({ ...p })),
+          externalParticipants: (orig.externalParticipants || []).map(p => ({ ...p })),
           expanded: true,
         });
       }
@@ -266,14 +298,24 @@
           meetingType: firstType,
           hostLocationId: firstLoc,
           participants: buildParticipantRows(firstType, firstLoc),
-          externalCount: 0,
-          externalEndpointType: firstType,
+          externalParticipants: [],
           layout: '1+7',
           presentationActive: true,
           meetingCount: 1,
           expanded: true,
         });
       }
+      function addExternalParticipant(id) {
+        const tmpl = meetingTemplates.find(t => t.id === id);
+        if (!tmpl) return;
+        const defaultType = endpointRows.find(r => Number(r.count) > 0)?.type || 'sip_h323';
+        tmpl.externalParticipants.push({ count: 0, endpointType: defaultType });
+      }
+      function removeExternalParticipant(id, index) {
+        const tmpl = meetingTemplates.find(t => t.id === id);
+        if (tmpl) tmpl.externalParticipants.splice(index, 1);
+      }
+
       function removeMeetingTemplate(id) {
         const idx = meetingTemplates.findIndex(t => t.id === id);
         if (idx !== -1) meetingTemplates.splice(idx, 1);
@@ -347,13 +389,14 @@
           (tmpl.participants || []).forEach(p => {
             participantEndpoints[p.endpointType] = (participantEndpoints[p.endpointType] || 0) + (Number(p.count) || 0);
           });
-          const externalCount = Number(tmpl.externalCount) || 0;
-          if (externalCount > 0 && tmpl.externalEndpointType) {
-            participantEndpoints[tmpl.externalEndpointType] =
-              (participantEndpoints[tmpl.externalEndpointType] || 0) + externalCount;
-          }
+          (tmpl.externalParticipants || []).forEach(p => {
+            const n = Number(p.count) || 0;
+            if (n > 0 && p.endpointType) {
+              participantEndpoints[p.endpointType] = (participantEndpoints[p.endpointType] || 0) + n;
+            }
+          });
           const totalPts      = Object.values(participantEndpoints).reduce((a, b) => a + b, 0);
-          const extPts        = externalCount;
+          const extPts        = (tmpl.externalParticipants || []).reduce((a, p) => a + (Number(p.count) || 0), 0);
           const extProportion = totalPts > 0 ? extPts / totalPts : 0;
 
           // Only SIP/H.323 and WebRTC meetings are hosted on Pexip Infinity itself.
@@ -483,17 +526,20 @@
           const nativeCount = (tmpl.participants || [])
             .filter(p => p.endpointType === tmpl.meetingType)
             .reduce((a, p) => a + (Number(p.count) || 0), 0)
-            + (externalCount > 0 && tmpl.externalEndpointType === tmpl.meetingType ? externalCount : 0);
+            + (tmpl.externalParticipants || [])
+                .filter(p => p.endpointType === tmpl.meetingType)
+                .reduce((a, p) => a + (Number(p.count) || 0), 0);
           const interopByType = {};
           (tmpl.participants || [])
             .filter(p => p.endpointType !== tmpl.meetingType && Number(p.count) > 0)
             .forEach(p => {
               interopByType[p.endpointType] = (interopByType[p.endpointType] || 0) + Number(p.count);
             });
-          if (externalCount > 0 && tmpl.externalEndpointType !== tmpl.meetingType) {
-            interopByType[tmpl.externalEndpointType] =
-              (interopByType[tmpl.externalEndpointType] || 0) + externalCount;
-          }
+          (tmpl.externalParticipants || [])
+            .filter(p => p.endpointType !== tmpl.meetingType && Number(p.count) > 0)
+            .forEach(p => {
+              interopByType[p.endpointType] = (interopByType[p.endpointType] || 0) + Number(p.count);
+            });
           const interopCount = Object.values(interopByType).reduce((a, b) => a + b, 0);
 
           return {
@@ -773,6 +819,8 @@
         duplicateTemplate,
         addBlankTemplate,
         removeMeetingTemplate,
+        addExternalParticipant,
+        removeExternalParticipant,
 
         // hardware state
         cpuInstructionSet,

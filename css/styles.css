@@ -1044,6 +1044,26 @@ footer a:hover { text-decoration: underline; }
   border-bottom: none;
 }
 
+.btn-add-external {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 6px;
+  padding: 4px 10px;
+  background: #fff;
+  border: 1.5px dashed var(--pex-border);
+  border-radius: 6px;
+  color: var(--pex-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-add-external:hover {
+  border-color: var(--pex-teal);
+  color: var(--pex-teal-dark);
+  background: var(--pex-teal-light);
+}
+
 /* ── Interop summary block ──────────────────────────────────────────────────── */
 .interop-summary-block {
   background: var(--pex-bg);
