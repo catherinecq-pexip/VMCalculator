@@ -39,6 +39,7 @@ The calculation model is grounded in Pexip's published capacity planning methodo
 - **Proxy node load** — Proxy/Edge nodes forward external calls without transcoding. Each forwarded call consumes approximately 0.2 HD on the proxy node. This demand is tracked separately from transcoding node HD and shown in node recommendations.
 - **VP9 resource trade-off** — VP9 reduces bandwidth by ~33% compared to H.264 at the same resolution, but increases node CPU load by 25% (`VP9_RESOURCE_FACTOR = 1.25`).
 - **Teams Adaptive Composition** — When the Adaptive/Teams-like layout is active and participants are present, an additional HD reservation is made per conference: +1.0 HD for up to 3 on-stage participants, plus +0.5 HD per on-stage participant beyond 3. This is separate from the Teams Connector gateway overhead.
+- **Host-native participant exclusion** — For meetings hosted on external platforms (Teams, Google Meet, Zoom, Skype for Business), native participants of the host platform don't route through Pexip Infinity and consume no Pexip HD or bandwidth resources. Only interop participants whose media path traverses Pexip count toward endpoint HD, gateway overhead, composition overhead, audio bandwidth, and presentation bandwidth. Pexip-native meeting types (SIP/H.323, WebRTC) are unaffected — all participants count.
 - **Template-driven resources** — Resources are consumed only during active conferences. Each template's per-meeting HD/BW cost is computed once and multiplied by the template's meeting count to produce aggregate totals.
 - **Layout-driven video participant limits** — Each layout has a maximum number of participants actively composited into the video mix. Participants beyond that limit are treated as audio-only for HD resource calculation (0.0625 HD × connFactor). Limits by category: Adaptive Composition (12); Speaker-Focused: 1+0 (1), 1+1 (2), 1+7 (8), 1+21 (22), 2+21 (23), 1+33 (34); Equal Grid: 2×2 (4), 3×3 (9), 4×4 (16), 5×5 (25).
 - **Demand-driven node recommendations** — The recommended transcoding node count is derived from meeting demand (vCPU required ÷ vCPU per node), not from the physical hardware count alone. Hardware configuration determines the node size and efficiency; demand determines how many nodes are needed.
@@ -95,7 +96,23 @@ extPts         = count of external participants (no location assigned)
 extProportion  = extPts / totalPts   (0.0 if no participants)
 ```
 
-**2b — Cross-location detection:**
+**2b — Host-native participant exclusion:**
+
+For external-hosted meetings, the host-native endpoint type is zeroed out before all HD and bandwidth sub-calculations. Those participants don't traverse Pexip Infinity.
+
+```
+PEXIP_NATIVE_TYPES  = { 'sip_h323', 'webrtc' }
+isExternalHosted    = meetingType ∉ PEXIP_NATIVE_TYPES
+
+pexipParticipantEndpoints = { ...participantEndpoints, [meetingType]: 0 }   if isExternalHosted
+                          = participantEndpoints                              otherwise
+
+pexipPts = sum(pexipParticipantEndpoints values)
+```
+
+`pexipPts` drives all HD, composition, gateway overhead, audio bandwidth, and presentation activation (Steps 2c–2e). `totalPts` (the full headcount) continues to govern backplane and proxy topology decisions (Steps 2f–2g).
+
+**2c — Cross-location detection:**
 ```
 locIdsWithPts  = set of location IDs with participant count > 0
 nonHostLocs    = locIdsWithPts excluding the template's host location
@@ -108,16 +125,16 @@ hasCrossLocation = true  if:
 crossLocationCount = max(0, nonHostLocs.length)   ← non-host locations with participants
 ```
 
-**2c — HD per endpoint type:**
+**2d — HD per endpoint type:**
 
-Layout video limits determine video-visible vs. audio-only split:
+Layout video limits determine video-visible vs. audio-only split, using Pexip-routed participants only:
 ```
 maxVideoPts   = LAYOUTS[layout].maxVideoParticipants   (null = no limit)
-audioOverflow = max(0, totalPts − maxVideoPts)
-videoFraction = min(1, maxVideoPts / totalPts)
+audioOverflow = max(0, pexipPts − maxVideoPts)
+videoFraction = min(1, maxVideoPts / pexipPts)
 ```
 
-For each participant type T with count > 0:
+For each participant type T with count > 0 (using `pexipParticipantEndpoints`):
 ```
 weight        = QUALITY_WEIGHTS[endpointRows[T].quality]
 codecFactor   = 1.25 if codec === 'vp9' else 1.0
@@ -135,7 +152,7 @@ hdPresentation_T = typeCount × ENDPOINT_TYPES[T].presentationHD
                    if (presentationExtra && presentationActive) else 0
 ```
 
-**2d — Teams Adaptive Composition overhead (per meeting):**
+**2e — Teams Adaptive Composition overhead (per meeting):**
 ```
 hdComposition = 0   if layout !== 'adaptive' or videoVisiblePts = 0
 
@@ -146,26 +163,26 @@ hdComposition = TEAMS_COMPOSITION_HD_BASE
 where:
   TEAMS_COMPOSITION_HD_BASE    = 1.0 HD   (≤3 on-stage participants)
   TEAMS_COMPOSITION_HD_ONSTAGE = 0.5 HD   (each on-stage participant beyond 3)
-  videoVisiblePts              = min(totalPts, maxVideoPts)
+  videoVisiblePts              = min(pexipPts, maxVideoPts)   ← Pexip-routed participants only
 ```
 
 This represents the video compositing overhead for adaptive layout and applies to any meeting using that layout, regardless of meeting type.
 
-**2e — Gateway call overhead (per meeting, per participant):**
+**2f — Gateway call overhead (per meeting, per participant):**
 
-When the meeting type is a cloud gateway, every participant generates a gateway call leg on the hosting transcoding node:
+When the meeting type is a cloud gateway, every Pexip-routed participant generates a gateway call leg on the hosting transcoding node. Host-native participants (excluded in Step 2b) do not generate a Pexip gateway leg.
 
 ```
 gatewayHDPerCall = GATEWAY_HD_PER_CALL_TEAMS        (1.5 HD)   if meetingType === 'teams'
                  = GATEWAY_HD_PER_CALL_GOOGLE_MEET  (1.0 HD)   if meetingType === 'google_meet'
                  = 0                                            otherwise
 
-hdGateway = totalPts × gatewayHDPerCall
+hdGateway = pexipPts × gatewayHDPerCall   ← Pexip-routed participants only
 ```
 
 This cost is fixed per call regardless of endpoint quality, and is separate from `hdComposition`. It represents the Teams Connector leg to Microsoft or the Google Meet connection to Google.
 
-**2f — Per-meeting backplane HD:**
+**2g — Per-meeting backplane HD:**
 
 Backplane cost is topology-driven. Each topology location is treated as a separate node. The same rule applies to all meeting types — gateway overhead (Teams/Google Meet) is a separate component.
 
@@ -194,7 +211,7 @@ else:   (single location = single-node deployment)
 
 Teams and Google Meet gateway meetings use the same backplane values. Their gateway leg costs (1.5 HD or 1.0 HD per call) are accounted for separately in `hdGateway`.
 
-**2g — Per-meeting HD total:**
+**2h — Per-meeting HD total:**
 ```
 hdTotal = hdEndpoints + hdPresentation + hdComposition + hdGateway
 ```
@@ -209,10 +226,11 @@ hdTotalAll      = hdTotal      × effectiveCount
 hdBackplaneAll  = hdBackplane  × effectiveCount
 ```
 
-**Example — Teams gateway, cross-location, 3 SIP participants (1 at host, 2 remote), multi-location topology, 10 meetings:**
+**Example — Teams gateway, cross-location, 3 SIP participants (1 at host, 2 remote), 0 Teams-native participants, multi-location topology, 10 meetings:**
 ```
+pexipPts      = 3   (all participants are SIP, not Teams-native → pexipParticipantEndpoints unaffected)
 hdEndpoints   = 3 × 1.0 = 3.0 HD   (SIP/H.264 at 720p)
-hdGateway     = 3 × 1.5 = 4.5 HD   (Teams Connector, 1.5 HD/call per participant)
+hdGateway     = 3 × 1.5 = 4.5 HD   (Teams Connector, 1.5 HD/call per Pexip-routed participant)
 hdComposition = 0                   (not adaptive layout)
 hdPresentation= 0                   (presentation off)
 
@@ -230,22 +248,22 @@ hdTotalAll    = 7.5 × 10  = 75 HD
 hdBackplaneAll= 2.0 × 10  = 20 HD
 ```
 
-**2h — Bandwidth per meeting (min / max range):**
+**2i — Bandwidth per meeting (min / max range):**
 
-Access bandwidth:
+Access bandwidth (using `pexipParticipantEndpoints` — host-native excluded):
 ```
 bwKey     = quality + '-' + codec
 bwMin     = BANDWIDTH_TABLE[bwKey]
 bwMax     = min(PARTICIPANT_MAX_KBPS, BANDWIDTH_TABLE_MAX[bwKey])
 
-bwAccessMin += typeCount × bwMin   (summed across all endpoint types)
+bwAccessMin += typeCount × bwMin   (summed across Pexip-routed endpoint types)
 bwAccessMax += typeCount × bwMax
 
-bwAudioMin  = totalPts × AUDIO_MIN_KBPS   (8 kbps/participant)
-bwAudioMax  = totalPts × AUDIO_MAX_KBPS   (64 kbps/participant)
+bwAudioMin  = pexipPts × AUDIO_MIN_KBPS   (8 kbps/participant)
+bwAudioMax  = pexipPts × AUDIO_MAX_KBPS   (64 kbps/participant)
 ```
 
-Presentation stream:
+Presentation stream (activated only if `pexipPts > 0`):
 ```
 pBw              = PRESENTATION_BW[meetingType] ?? PRESENTATION_BW.default
 bwPresentationMin = pBw.min
