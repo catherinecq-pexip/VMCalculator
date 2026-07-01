@@ -84,11 +84,24 @@
       }
 
       // Derived topology state
-      const allNodes                     = computed(() => locations.flatMap(l => l.nodes));
+      // allNodeDefinitions: one entry per node definition (not multiplied by server quantity)
+      // allNodes: quantity-multiplied — used for counts and capacity calculations
+      const allNodeDefinitions = computed(() => servers.flatMap(s =>
+        s.nodes.map(n => ({ ...n, locationId: n.locationId ?? s.locationId, _serverId: s.id }))
+      ));
+      const allNodes = computed(() =>
+        servers.flatMap(s => {
+          const resolved = s.nodes.map(n => ({ ...n, locationId: n.locationId ?? s.locationId }));
+          if (s.quantity <= 1) return resolved;
+          return Array.from({ length: s.quantity }, () => resolved).flat();
+        })
+      );
       const totalDefinedTranscodingNodes = computed(() => allNodes.value.filter(n => n.role === 'transcoding').length);
       const totalDefinedProxyNodes       = computed(() => allNodes.value.filter(n => n.role === 'proxy').length);
       const totalDefinedExternalNodes    = computed(() => allNodes.value.filter(n => n.role === 'external').length);
-      const transcodingLocations         = computed(() => locations.filter(l => l.nodes.some(n => n.role === 'transcoding')));
+      const transcodingLocations         = computed(() =>
+        locations.filter(loc => allNodes.value.some(n => n.role === 'transcoding' && n.locationId === loc.id))
+      );
       const numberOfTranscodingLocations = computed(() => transcodingLocations.value.length);
       const viaProxy                     = computed(() => totalDefinedProxyNodes.value > 0 || totalDefinedExternalNodes.value > 0);
 
@@ -321,37 +334,218 @@
         if (idx !== -1) meetingTemplates.splice(idx, 1);
       }
 
-      // ── hardware ──────────────────────────────────────────────────────────
-      const cpuInstructionSet = ref('avx2');
-      const cpuClockGhz       = ref(3.0);
-      const cpuCoresPerSocket = ref(24);
-      const cpuSocketCount    = ref(2);
-      const hyperthreading    = ref(false);
-      const hypervisor        = ref('vmware');
+      // ── hardware builder — server fleet ───────────────────────────────────
+      const servers     = reactive([]);
+      const hwActiveTab = ref('servers');
 
-      // Total physical cores across all sockets
-      const totalPhysicalCores = computed(() =>
-        cpuCoresPerSocket.value * cpuSocketCount.value
-      );
-      // Total vCPU available from hardware (HT doubles logical threads)
-      const totalAvailableVCPU = computed(() =>
-        totalPhysicalCores.value * (hyperthreading.value ? 2 : 1)
-      );
-      // Conferencing nodes: ~22 physical cores per node (NUMA-aware, per socket)
-      const recommendedNodeCount = computed(() =>
-        Math.max(1, Math.floor(totalPhysicalCores.value / C.CORES_PER_NODE_TARGET))
-      );
-      // vCPU size of each conferencing node
-      const vCPUPerNode = computed(() =>
-        Math.ceil(totalPhysicalCores.value / recommendedNodeCount.value) * (hyperthreading.value ? 2 : 1)
-      );
+      function uid() { return Date.now() + Math.floor(Math.random() * 10000); }
 
       function roundToStandardRAM(gb) {
-        for (const s of [8, 16, 32, 64, 128, 256]) { if (s >= gb) return s; }
+        for (const sz of [8, 16, 32, 64, 128, 256]) { if (sz >= gb) return sz; }
         return 256;
       }
-      // RAM per node: 1 GB per vCPU, rounded to standard size
-      const ramPerNode = computed(() => roundToStandardRAM(vCPUPerNode.value));
+
+      // HD capacity contributed by one transcoding node, given its server's specs
+      function nodeHDCapacity(node, server) {
+        if (node.role !== 'transcoding') return 0;
+        return node.vCPU
+          * 4.0
+          * (server.baseClockGhz / C.CPU_REFERENCE_CLOCK)
+          * (server.hyperthreading ? C.HT_BONUS_FACTOR : 1.0)
+          * (C.HYPERVISOR_FACTORS[server.hypervisor] ?? 1.0);
+      }
+
+      // Look up a node's server and return its HD capacity (used from template + Section 2)
+      function serverNodeHD(node) {
+        const server = servers.find(s => s.nodes.some(n => n.id === node.id));
+        return server ? nodeHDCapacity(node, server) : 0;
+      }
+
+      function addServer() {
+        servers.push({
+          id:                   uid(),
+          name:                 '',
+          quantity:             1,
+          locationId:           null,
+          expanded:             true,
+          nodesExpanded:        true,
+          socketsPerServer:     2,
+          physicalCoresPerSocket: 24,
+          baseClockGhz:         3.0,
+          hyperthreading:       false,
+          hypervisor:           'vmware',
+          totalRAM:             64,
+          nodes:                [],
+        });
+      }
+
+      function removeServer(id) {
+        const idx = servers.findIndex(s => s.id === id);
+        if (idx !== -1) servers.splice(idx, 1);
+      }
+
+      function duplicateServer(id) {
+        const orig = servers.find(s => s.id === id);
+        if (!orig) return;
+        servers.push({
+          ...orig,
+          id:    uid(),
+          nodes: orig.nodes.map(n => ({ ...n, id: uid() })),
+        });
+      }
+
+      function toggleServer(id) {
+        const s = servers.find(sv => sv.id === id);
+        if (s) s.expanded = !s.expanded;
+      }
+
+      function addNodeToServer(serverId) {
+        const server = servers.find(s => s.id === serverId);
+        if (!server) return;
+        const threadsPerSocket = server.physicalCoresPerSocket * (server.hyperthreading ? 2 : 1);
+        // Find first socket with available capacity
+        let socket = 1;
+        for (let i = 1; i <= server.socketsPerServer; i++) {
+          const used = server.nodes
+            .filter(n => n.socketNUMA === i)
+            .reduce((a, n) => a + n.vCPU, 0);
+          if (used < threadsPerSocket) { socket = i; break; }
+        }
+        const vCPU = threadsPerSocket;
+        const ram  = roundToStandardRAM(vCPU);
+        server.nodes.push({
+          id:         uid(),
+          name:       '',
+          role:       'transcoding',
+          socketNUMA: socket,
+          vCPU,
+          ram,
+          locationId: null, // inherits server's locationId
+        });
+      }
+
+      function removeNodeFromServer(serverId, nodeId) {
+        const server = servers.find(s => s.id === serverId);
+        if (!server) return;
+        const idx = server.nodes.findIndex(n => n.id === nodeId);
+        if (idx !== -1) server.nodes.splice(idx, 1);
+      }
+
+      function applyRoleDefaults(node, server) {
+        if (node.role === 'management') {
+          node.vCPU = 8;
+          node.ram  = 8;
+        } else if (node.role === 'proxy') {
+          node.vCPU = 4;
+          node.ram  = 4;
+        } else {
+          const threads = server.physicalCoresPerSocket * (server.hyperthreading ? 2 : 1);
+          node.vCPU = threads;
+          node.ram  = roundToStandardRAM(threads);
+        }
+      }
+
+      // When switching to "Configure Nodes" tab, expand all server node sections
+      watch(hwActiveTab, (tab) => {
+        if (tab === 'nodes') servers.forEach(s => { s.nodesExpanded = true; });
+      });
+
+      // Primary server = first defined server (used for effectiveHDperVcpu fallback, CPU model card)
+      const primaryServer = computed(() => servers[0] ?? null);
+
+      // Total vCPU capacity across all servers (quantity-weighted)
+      const totalAvailableVCPU = computed(() =>
+        servers.reduce((acc, s) => {
+          const threads = s.physicalCoresPerSocket * (s.hyperthreading ? 2 : 1);
+          return acc + s.quantity * s.socketsPerServer * threads;
+        }, 0)
+      );
+
+      // Average vCPU per transcoding node (or fallback estimate from primary server specs)
+      const vCPUPerNode = computed(() => {
+        const tNodes = allNodeDefinitions.value.filter(n => n.role === 'transcoding');
+        if (tNodes.length === 0) {
+          const s = primaryServer.value;
+          if (!s) return 48;
+          const cores     = s.socketsPerServer * s.physicalCoresPerSocket;
+          const nodeCount = Math.max(1, Math.floor(cores / C.CORES_PER_NODE_TARGET));
+          return Math.ceil(cores / nodeCount) * (s.hyperthreading ? 2 : 1);
+        }
+        return Math.round(tNodes.reduce((a, n) => a + n.vCPU, 0) / tNodes.length);
+      });
+
+      // Average RAM per transcoding node (or fallback)
+      const ramPerNode = computed(() => {
+        const tNodes = allNodeDefinitions.value.filter(n => n.role === 'transcoding');
+        if (tNodes.length === 0) return roundToStandardRAM(vCPUPerNode.value);
+        return Math.round(tNodes.reduce((a, n) => a + n.ram, 0) / tNodes.length);
+      });
+
+      // ── server allocation computeds ───────────────────────────────────────
+
+      // Per-server breakdown of vCPU, RAM, HD, and per-socket thread usage
+      const serverAllocations = computed(() =>
+        servers.map(s => {
+          const threadsPerSocket = s.physicalCoresPerSocket * (s.hyperthreading ? 2 : 1);
+          const totalVCPU        = s.socketsPerServer * threadsPerSocket;
+          const allocatedVCPU    = s.nodes.reduce((a, n) => a + n.vCPU, 0);
+          const allocatedRAM     = s.nodes.reduce((a, n) => a + n.ram, 0);
+          const hdPerServer      = s.nodes
+            .filter(n => n.role === 'transcoding')
+            .reduce((a, n) => a + nodeHDCapacity(n, s), 0);
+
+          const socketBreakdown = Array.from({ length: s.socketsPerServer }, (_, i) => {
+            const sock = i + 1;
+            const used = s.nodes
+              .filter(n => n.socketNUMA === sock)
+              .reduce((a, n) => a + n.vCPU, 0);
+            return { socket: sock, used, total: threadsPerSocket, remaining: threadsPerSocket - used };
+          });
+
+          return {
+            id: s.id, name: s.name, quantity: s.quantity,
+            totalVCPU, allocatedVCPU, remainingVCPU: totalVCPU - allocatedVCPU,
+            totalRAM: s.totalRAM, allocatedRAM, remainingRAM: s.totalRAM - allocatedRAM,
+            hdPerServer, totalHD: hdPerServer * s.quantity,
+            socketBreakdown,
+          };
+        })
+      );
+
+      // Physical Capacity Summary table (one row per server group)
+      const physicalCapacitySummary = computed(() =>
+        servers.map((s, idx) => {
+          const loc   = locations.find(l => l.id === s.locationId);
+          const alloc = serverAllocations.value[idx];
+          return {
+            name:           s.name || ('Server ' + (idx + 1)),
+            locationName:   loc?.name || '—',
+            quantity:       s.quantity,
+            nodesPerServer: s.nodes.filter(n => n.role === 'transcoding').length,
+            rawHDPerServer: alloc.hdPerServer,
+            totalRawHD:     alloc.hdPerServer * s.quantity,
+          };
+        })
+      );
+
+      const totalRawHDCapacity = computed(() =>
+        physicalCapacitySummary.value.reduce((a, r) => a + r.totalRawHD, 0)
+      );
+
+      // Global allocation summary (shown in the section header chips)
+      const hwAllocationSummary = computed(() => ({
+        totalServers:       servers.length,
+        totalTranscoding:   allNodes.value.filter(n => n.role === 'transcoding').length,
+        totalProxy:         allNodes.value.filter(n => n.role === 'proxy').length,
+        totalManagement:    allNodes.value.filter(n => n.role === 'management').length,
+        totalHDCapacity:    totalRawHDCapacity.value,
+        totalVCPUAllocated: servers.reduce((a, s) =>
+          a + s.nodes.reduce((b, n) => b + n.vCPU, 0) * s.quantity, 0),
+        totalVCPUCapacity:  totalAvailableVCPU.value,
+        totalRAMAllocated:  servers.reduce((a, s) =>
+          a + s.nodes.reduce((b, n) => b + n.ram, 0) * s.quantity, 0),
+        totalRAMCapacity:   servers.reduce((a, s) => a + s.totalRAM * s.quantity, 0),
+      }));
 
       // ── endpoint reference data (display only — HD/participant) ───────────
       const rowResults = computed(() =>
@@ -616,21 +810,23 @@
       const totalHDRaw          = computed(() => totalHDBeforeBackplane.value + backplaneHD.value);
       const totalHDWithHeadroom = computed(() => totalHDRaw.value * C.HEADROOM_FACTOR);
 
-      // ── step 6: CPU efficiency ────────────────────────────────────────────
+      // ── step 6: CPU efficiency — derived from primary (first) server ─────
       const effectiveHDperVcpu = computed(() => {
-        const base    = C.CPU_EFFICIENCY_TABLE[cpuInstructionSet.value] ?? 4.0;
-        const clockFx = cpuClockGhz.value / C.CPU_REFERENCE_CLOCK;
-        const htFx    = hyperthreading.value ? C.HT_BONUS_FACTOR : 1.0;
-        const hvFx    = C.HYPERVISOR_FACTORS[hypervisor.value] ?? 1.0;
-        return base * clockFx * htFx * hvFx;
+        const s = primaryServer.value;
+        if (!s) return 4.0 * (3.0 / C.CPU_REFERENCE_CLOCK);
+        return 4.0
+          * (s.baseClockGhz / C.CPU_REFERENCE_CLOCK)
+          * (s.hyperthreading ? C.HT_BONUS_FACTOR : 1.0)
+          * (C.HYPERVISOR_FACTORS[s.hypervisor] ?? 1.0);
       });
 
       // ── step 7: vCPU + node count ─────────────────────────────────────────
       const vCPURequired = computed(() => Math.ceil(totalHDWithHeadroom.value));
-      // Node count is hardware-derived (floor(total_cores / 22)), not HD-derived
-      const transcodingNodeCount = computed(() =>
-        Math.max(1, Math.ceil(vCPURequired.value / vCPUPerNode.value))
-      );
+      // Node count: use user-defined transcoding nodes when available; fall back to HD-derived estimate
+      const transcodingNodeCount = computed(() => {
+        const defined = allNodes.value.filter(n => n.role === 'transcoding').length;
+        return defined || Math.max(1, Math.ceil(vCPURequired.value / vCPUPerNode.value));
+      });
       const proxyNodeCount = computed(() =>
         totalDefinedProxyNodes.value + totalDefinedExternalNodes.value
       );
@@ -680,36 +876,43 @@
       const warnings = computed(() => {
         const w = [];
 
-        if (cpuSocketCount.value < 2) {
-          w.push({
-            type: 'numa',
-            text: 'Minimum 2 CPU sockets required. Conferencing nodes must be NUMA-pinned to a single socket — single-socket servers cannot safely host Pexip nodes.',
+        // Per-server hardware warnings
+        servers.forEach((s, idx) => {
+          const alloc = serverAllocations.value[idx];
+          const label = s.name || ('Server ' + (idx + 1));
+
+          if (s.socketsPerServer < 2) {
+            w.push({ type: 'numa', text: `${label}: Minimum 2 CPU sockets required. Conferencing nodes must be NUMA-pinned to a single socket.` });
+          }
+          if (s.baseClockGhz < C.CPU_MIN_CLOCK_GHZ) {
+            w.push({ type: 'numa', text: `${label}: Base clock ${s.baseClockGhz.toFixed(1)} GHz is below the recommended minimum of ${C.CPU_MIN_CLOCK_GHZ} GHz for Pexip nodes.` });
+          }
+          if (alloc.remainingVCPU < 0) {
+            w.push({ type: 'numa', text: `${label}: Over-allocated by ${Math.abs(alloc.remainingVCPU)} vCPU (${alloc.allocatedVCPU} allocated, ${alloc.totalVCPU} available). Reduce node vCPU or add more sockets.` });
+          }
+          if (alloc.remainingRAM < 0) {
+            w.push({ type: 'numa', text: `${label}: Over-allocated by ${Math.abs(alloc.remainingRAM)} GB RAM (${alloc.allocatedRAM} GB allocated, ${s.totalRAM} GB available).` });
+          }
+          alloc.socketBreakdown.forEach(sock => {
+            if (sock.remaining < 0) {
+              w.push({ type: 'numa', text: `${label} Socket ${sock.socket}: ${sock.used} vCPU assigned but only ${sock.total} threads available.` });
+            }
           });
+          if (s.hyperthreading) {
+            w.push({ type: 'ht', text: `${label}: Hyperthreading bonus applied. Requires NUMA-pinned VM affinity. Disable vMotion / Live Migration when using CPU pinning.` });
+          }
+          if (s.hypervisor !== 'cloud') {
+            const hvName = { vmware: 'VMware', hyperv: 'Hyper-V', kvm: 'KVM' }[s.hypervisor] ?? s.hypervisor;
+            w.push({ type: 'overcommit', text: `${label}: Avoid CPU overcommit on ${hvName}. Pexip is CPU-intensive; maintain a 1:1 vCPU-to-pCPU ratio.` });
+          }
+        });
+
+        // Deployment-wide hardware capacity vs demand
+        if (servers.length > 0 && totalRawHDCapacity.value < totalHDWithHeadroom.value && totalHDWithHeadroom.value > 0) {
+          w.push({ type: 'numa', text: `Hardware HD capacity (${fmtHD(totalRawHDCapacity.value)} HD) is less than required capacity with headroom (${fmtHD(totalHDWithHeadroom.value)} HD). Add more servers or transcoding nodes.` });
         }
-        if (cpuClockGhz.value < C.CPU_MIN_CLOCK_GHZ) {
-          w.push({
-            type: 'numa',
-            text: `Base clock ${cpuClockGhz.value.toFixed(1)} GHz is below the recommended minimum of ${C.CPU_MIN_CLOCK_GHZ} GHz for Pexip conferencing nodes.`,
-          });
-        }
-        const nodesPerSocket = recommendedNodeCount.value / cpuSocketCount.value;
-        if (nodesPerSocket > 2) {
-          w.push({
-            type: 'numa',
-            text: `${Math.round(nodesPerSocket)} nodes per socket exceeds the maximum of 2. Pexip only supports up to 2 nodes per socket when ≥44 cores are available per socket.`,
-          });
-        }
-        if (vCPURequired.value > totalAvailableVCPU.value) {
-          w.push({
-            type: 'numa',
-            text: `Insufficient hardware: ${vCPURequired.value} vCPU required but only ${totalAvailableVCPU.value} vCPU available across ${recommendedNodeCount.value} node${recommendedNodeCount.value !== 1 ? 's' : ''}. Add more cores/sockets or reduce meeting demand.`,
-          });
-        }
-        if (hypervisor.value !== 'cloud') {
-          w.push({
-            type: 'overcommit',
-            text: `Avoid CPU overcommit on ${hypervisor.value === 'vmware' ? 'VMware' : hypervisor.value === 'hyperv' ? 'Hyper-V' : 'KVM'}. Pexip is CPU-intensive; maintain a 1:1 vCPU-to-pCPU ratio.`,
-          });
+        if (servers.length > 0 && totalAvailableVCPU.value > 0 && vCPURequired.value > totalAvailableVCPU.value) {
+          w.push({ type: 'numa', text: `Insufficient hardware: ${vCPURequired.value} vCPU required but only ${totalAvailableVCPU.value} vCPU available. Add more servers or increase socket/core counts.` });
         }
         if (topologyMode.value === 'multi_site' && !viaProxy.value) {
           w.push({
@@ -727,12 +930,6 @@
           w.push({
             type: 'vp9',
             text: 'VP9 selected for WebRTC: +25% node resource overhead vs VP8/H.264. VP9 saves ~33% bandwidth but increases CPU load.',
-          });
-        }
-        if (hyperthreading.value) {
-          w.push({
-            type: 'ht',
-            text: 'Hyperthreading bonus applied. This requires NUMA-pinned VM affinity rules. Disable vMotion / Live Migration when using CPU pinning.',
           });
         }
         if (locations.length > 0 && endpointRows.some(r => Number(r.count) > 0) && !allEndpointsAssigned.value) {
@@ -798,8 +995,7 @@
       });
 
       // ── lookup tables exposed to template ─────────────────────────────────
-      const EFFICIENCY_BASE = { avx2: 4.0, avx512: 6.0 };
-      const HV_FACTORS      = { vmware: 1.0, kvm: 0.95, hyperv: 0.90, cloud: 1.0 };
+      const HV_FACTORS = { vmware: 1.0, kvm: 0.95, hyperv: 0.90, cloud: 1.0 };
       const CPU_MIN_CLOCK   = C.CPU_MIN_CLOCK_GHZ;
 
       // ── return ─────────────────────────────────────────────────────────────
@@ -822,20 +1018,30 @@
         addExternalParticipant,
         removeExternalParticipant,
 
-        // hardware state
-        cpuInstructionSet,
-        cpuClockGhz,
-        cpuCoresPerSocket,
-        cpuSocketCount,
-        hyperthreading,
-        hypervisor,
+        // hardware builder state
+        servers,
+        hwActiveTab,
+        primaryServer,
 
-        // hardware capacity (computed)
-        totalPhysicalCores,
+        // hardware builder actions
+        addServer,
+        removeServer,
+        duplicateServer,
+        toggleServer,
+        addNodeToServer,
+        removeNodeFromServer,
+        applyRoleDefaults,
+        serverNodeHD,
+
+        // hardware builder computeds
         totalAvailableVCPU,
-        recommendedNodeCount,
         vCPUPerNode,
         ramPerNode,
+        serverAllocations,
+        physicalCapacitySummary,
+        totalRawHDCapacity,
+        hwAllocationSummary,
+        allNodeDefinitions,
 
         // computed — endpoint ref data
         rowResults,
@@ -880,8 +1086,6 @@
         // actions — topology
         addLocation,
         removeLocation,
-        addNodeToLocation,
-        removeNodeFromLocation,
         toggleLocation,
         toggleLocationNodes,
 
@@ -892,8 +1096,8 @@
         ENDPOINT_QUALITY_OPTIONS: C.ENDPOINT_QUALITY_OPTIONS,
         NODE_SIZES:               C.NODE_SIZES,
         NODE_ROLES:               C.NODE_ROLES,
+        NODE_ROLES_HW:            C.NODE_ROLES_HW,
         QUALITY_LABELS:           C.QUALITY_LABELS,
-        EFFICIENCY_BASE,
         HV_FACTORS,
         CPU_MIN_CLOCK,
 

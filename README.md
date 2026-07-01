@@ -20,9 +20,9 @@ Architects and customers use this tool to answer:
 The workflow mirrors how Pexip resources are actually consumed:
 
 1. **Define endpoint types** (① Endpoint & Interop Model) — set total count, quality, and codec for each platform (SIP/H.323, Zoom, WebRTC, Teams, Google Meet, Skype for Business). Connection factors and gateway overhead are applied automatically.
-2. **Build the topology** (② Deployment Topology Builder) — create locations, add nodes with roles (Transcoding / Proxy / External), and assign how many endpoints of each type sit at each location.
+2. **Build the topology** (② Deployment Topology Builder) — create locations and assign how many endpoints of each type sit at each location. Nodes defined in ④ automatically appear here in a read-only view, grouped by location.
 3. **Configure meetings** (③ Meeting Builder) — meeting templates are **auto-generated** from the topology. Each template specifies: participant count and distribution by location (including external), meeting type (gateway target or standard VMR), layout, and presentation. The Endpoint Pool Allocation summary at the top of this section shows demand against assigned endpoints in real time. Resource calculations are topology-driven and independent of the hardware configuration section.
-4. **Configure hardware** (④ Hardware Configuration) — select CPU instruction set (AVX2 or AVX-512 — all Pexip nodes require at least AVX), clock speed, socket count, cores per socket, hyperthreading, and hypervisor. Node recommendations and vCPU requirements update dynamically from meeting demand.
+4. **Build the hardware deployment** (④ Deployment Hardware Builder) — define one or more physical or cloud servers (sockets, cores, clock speed, hyperthreading, RAM, hypervisor). Each server is a resource container. Carve Pexip nodes out of servers in the Configure Nodes tab: assign each node a role (Transcoding Conferencing, Proxying Edge, Management), socket/NUMA affinity, vCPU, and RAM. Node counts drive the allocation summary strip and feed back into the topology view in ②. HD capacity and vCPU/RAM allocation are tracked per server and across the deployment.
 
 The output is a per-location node recommendation table, total vCPU count, per-template HD breakdown with full backplane and gateway decomposition in the interop summary, and a five-section network bandwidth model.
 
@@ -47,7 +47,7 @@ The calculation model is grounded in Pexip's published capacity planning methodo
 - **NUMA alignment** — Pexip performance is sensitive to NUMA topology. A node VM should not span NUMA nodes. The calculator warns when `nodesPerSocket > 2`.
 - **No CPU overcommit** — Pexip is CPU-intensive real-time media software. The calculator warns to maintain a 1:1 vCPU-to-physical-core ratio on non-cloud hypervisors.
 - **25% headroom** — All resource totals are multiplied by 1.25 before converting to node counts. This provides capacity for bursts and rolling upgrades.
-- **CPU efficiency calibration** — Base HD-per-vCPU figures are calibrated from Pexip NUMA documentation (Xeon Gold 6342, AVX-512, 2.8 GHz ≈ 195 HD across 2 nodes × 16 vCPU each). Clock speed scales linearly from that reference point. All nodes must support at least the AVX instruction set.
+- **CPU efficiency calibration** — The base HD/vCPU efficiency is fixed at **4.0 HD/vCPU** (AVX2 baseline, 2.8 GHz reference clock). Clock speed and hypervisor factors scale linearly from that reference. Hyperthreading adds a 1.4× bonus when VMs are NUMA-pinned to a single socket. This conservative fixed baseline avoids the variability introduced by per-server instruction set selection.
 
 ---
 
@@ -367,57 +367,57 @@ The 25% headroom provides capacity for concurrent-use bursts and rolling node up
 
 ### Step 6 — CPU efficiency model
 
-Translates total HD demand into a vCPU count based on target server characteristics.
+Translates total HD demand into a vCPU count based on the primary server's characteristics. If no servers have been defined, a reference estimate is used (4.0 × 3.0/2.8 ≈ 4.29 HD/vCPU).
 
 ```
-effectiveHDperVcpu = CPU_EFFICIENCY_TABLE[cpuInstructionSet]
-                     × (cpuClockGhz / CPU_REFERENCE_CLOCK)
-                     × (HT_BONUS_FACTOR if hyperthreading else 1.0)
-                     × HYPERVISOR_FACTORS[hypervisor]
+effectiveHDperVcpu = 4.0   (fixed AVX2 baseline, 2.8 GHz reference)
+                     × (primaryServer.baseClockGhz / CPU_REFERENCE_CLOCK)
+                     × (HT_BONUS_FACTOR if primaryServer.hyperthreading else 1.0)
+                     × HYPERVISOR_FACTORS[primaryServer.hypervisor]
 ```
 
-**Instruction set — all Pexip nodes require at least AVX:**
+The base of **4.0 HD/vCPU** is a fixed conservative baseline (AVX2 at 2.8 GHz reference). Clock speed scales linearly from that reference point.
 
-| Instruction set | Base HD/vCPU |
-|---|---|
-| AVX2 | 4.0 |
-| AVX-512 | 6.0 |
-
-`CPU_REFERENCE_CLOCK = 2.8 GHz` (calibrated from Pexip NUMA docs: Xeon Gold 6342, AVX-512).
+`CPU_REFERENCE_CLOCK = 2.8 GHz`
 
 | Hypervisor | Factor |
 |---|---|
 | VMware ESXi | 1.0 |
 | KVM | 0.95 |
 | Hyper-V | 0.90 |
-| Cloud / bare | 1.0 |
+| Cloud / hosted | 1.0 |
 
 `HT_BONUS_FACTOR = 1.4` — only valid when VMs are NUMA-pinned to a single socket.
 
-**Example:** AVX-512, 3.2 GHz, Hyper-V, HT off:
+**Example:** 3.2 GHz, Hyper-V, HT off:
 ```
-effectiveHDperVcpu = 6.0 × (3.2 / 2.8) × 1.0 × 0.90 ≈ 6.17 HD/vCPU
+effectiveHDperVcpu = 4.0 × (3.2 / 2.8) × 1.0 × 0.90 ≈ 4.11 HD/vCPU
 ```
 
 ---
 
 ### Step 7 — vCPU and node count
 
-Node count is **demand-driven** — it scales with how many vCPUs the meetings require, not with the physical hardware count.
-
 ```
-vCPURequired      = ceil(totalHDWithHeadroom)   (1 HD = 1 vCPU planning rule)
-vCPUPerNode       = ceil(totalPhysicalCores / recommendedNodeCount) × (2 if HT else 1)
-transcodingNodes  = max(1, ceil(vCPURequired / vCPUPerNode))
+vCPURequired = ceil(totalHDWithHeadroom)   (1 HD = 1 vCPU planning rule)
 ```
 
-`recommendedNodeCount` (used only to size each node) is hardware-derived:
+**Transcoding node count** — if transcoding nodes have been defined in the Hardware Builder, the count is taken directly from the user's deployment definition (× server quantity). If no nodes have been defined yet, the count falls back to a demand-derived estimate:
+
 ```
-recommendedNodeCount = max(1, floor(totalPhysicalCores / CORES_PER_NODE_TARGET))
-CORES_PER_NODE_TARGET = 22   (physical cores per node)
+vCPUPerNode      = average vCPU across defined transcoding nodes
+                   OR: ceil(socketsPerServer × coresPerSocket / CORES_PER_NODE_TARGET) × HT_factor
+                       if no nodes defined
+
+transcodingNodes = defined transcoding nodes × server quantity   (when nodes are defined)
+                 = max(1, ceil(vCPURequired / vCPUPerNode))      (fallback estimate)
+
+CORES_PER_NODE_TARGET = 22   (physical cores per node target)
 ```
 
-**Proxy / External node count** comes from the topology: total Proxy (DMZ/Edge) + External (Public-facing) nodes defined in the Topology Builder. These nodes are always 4 vCPU / 4 GB RAM.
+**Proxy node count** comes from the Hardware Builder: total Proxying Edge nodes defined across all servers × server quantity. Default sizing: 4 vCPU / 4 GB RAM.
+
+**Management node count** comes from the Hardware Builder: total Management nodes defined. Default sizing: 8 vCPU / 8 GB RAM.
 
 **Proxy node HD demand** (informational, shown in node recommendations):
 ```
@@ -535,12 +535,13 @@ HEADROOM_FACTOR: 1.30,
 4. Add a `my_endpoint: 0` key to the `endpointAssignments` object in `addLocation()` so new locations include this type.
 5. `rowResults` and `meetingResults` will pick up the new type automatically.
 
-### Adding a new node role to the Topology Builder
+### Adding a new node role to the Hardware Builder
 
-1. Add an entry to `NODE_ROLES` in [js/config.js](js/config.js).
-2. Add an `<option>` to the role `<select>` in [index.html](index.html).
-3. Add a `totalDefinedMyRoleNodes` computed in [js/app.js](js/app.js).
-4. Push a row into `nodeRecommendations` and add a `.badge-my-role` CSS class in [css/styles.css](css/styles.css).
+1. Add an entry to `NODE_ROLES_HW` in [js/config.js](js/config.js).
+2. Add an `<option>` to the role `<select>` in the Configure Nodes tab in [index.html](index.html).
+3. Add vCPU/RAM defaults for the new role in `applyRoleDefaults()` in [js/app.js](js/app.js).
+4. Add a `totalDefinedMyRoleNodes` count to `hwAllocationSummary` if the role should appear in the summary strip.
+5. Push a row into `nodeRecommendations` and add a `.badge-my-role` CSS class in [css/styles.css](css/styles.css).
 
 ### Adding a new gateway meeting type
 

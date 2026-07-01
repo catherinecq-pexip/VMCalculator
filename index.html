@@ -158,8 +158,10 @@
                      @click.stop class="location-name-input" />
               <input type="text" v-model="loc.description" placeholder="Description (optional)"
                      @click.stop class="location-desc-input" />
-              <span class="location-node-count" v-if="loc.nodes.length > 0">
-                {{ loc.nodes.length }} node{{ loc.nodes.length !== 1 ? 's' : '' }}
+              <span class="location-node-count"
+                    v-if="allNodeDefinitions.filter(n => n.locationId === loc.id).length > 0">
+                {{ allNodeDefinitions.filter(n => n.locationId === loc.id).length }}
+                node{{ allNodeDefinitions.filter(n => n.locationId === loc.id).length !== 1 ? 's' : '' }}
               </span>
               <button class="btn-remove" @click.stop="removeLocation(loc.id)" title="Remove location">✕</button>
             </div>
@@ -205,19 +207,29 @@
                 <span>Node Configuration</span>
               </div>
               <div v-show="loc.nodesExpanded">
-                <p class="no-nodes-hint" v-if="loc.nodes.length === 0">
-                  No nodes — click "Add Node" to define compute for this location.
+                <p class="no-nodes-hint" v-if="!allNodeDefinitions.some(n => n.locationId === loc.id)">
+                  No nodes assigned to this location —
+                  <span style="color:var(--pex-teal)">define nodes in ④ Hardware Builder.</span>
                 </p>
-                <div class="node-row" v-for="node in loc.nodes" :key="node.id">
-                  <input type="text" v-model="node.name" placeholder="Node name (optional)" />
-                  <select v-model="node.role">
-                    <option value="transcoding">Transcoding (Internal)</option>
-                    <option value="proxy">Proxy (DMZ / Edge)</option>
-                    <option value="external">External (Public-facing)</option>
-                  </select>
-                  <button class="btn-remove" @click="removeNodeFromLocation(loc.id, node.id)" title="Remove node">✕</button>
+                <div class="node-row node-row-readonly"
+                     v-for="node in allNodeDefinitions.filter(n => n.locationId === loc.id)"
+                     :key="node.id">
+                  <span class="node-role-badge"
+                        :class="{
+                          'badge-transcoding': node.role === 'transcoding',
+                          'badge-proxy':       node.role === 'proxy',
+                          'badge-management':  node.role === 'management',
+                        }">{{ NODE_ROLES_HW[node.role] ?? node.role }}</span>
+                  <span class="node-name-ro">{{ node.name || '—' }}</span>
+                  <span class="node-meta-ro">{{ node.vCPU }} vCPU · {{ node.ram }} GB RAM</span>
+                  <span class="node-hd-ro" v-if="node.role === 'transcoding'"
+                        style="color:var(--pex-teal-dark)">
+                    ~{{ fmtHD(serverNodeHD(node)) }} HD
+                  </span>
                 </div>
-                <button class="btn-add" style="margin-top:6px" @click="addNodeToLocation(loc.id)">＋ Add Node</button>
+                <p class="inline-note" style="margin-top:6px;font-size:11px">
+                  ↓ Add or change nodes in ④ Hardware Builder
+                </p>
               </div>
 
             </div>
@@ -452,121 +464,272 @@
         </div>
       </div>
 
-      <!-- ── ④. Hardware Configuration ───────────────────────────────────── -->
+      <!-- ── ④. Deployment Hardware Builder ──────────────────────────────── -->
       <div class="section-card">
         <div class="section-header">
           <div class="section-icon">④</div>
-          <h2>Hardware Configuration</h2>
+          <h2>Deployment Hardware Builder</h2>
+          <span class="section-hint">Servers · Node allocation · Resource tracking</span>
         </div>
         <div class="section-body">
 
-          <!-- CPU topology inputs -->
-          <div class="field-row">
-            <div class="field-group">
-              <label class="field-label">Physical cores per socket</label>
-              <input type="number" v-model.number="cpuCoresPerSocket" min="4" max="128" step="1" />
+          <!-- ── Allocation Summary strip ─────────────────────────────────── -->
+          <div class="hw-allocation-summary">
+            <div class="hw-summary-chip">
+              <span class="chip-label">Servers</span>
+              <span class="chip-value">{{ hwAllocationSummary.totalServers }}</span>
             </div>
-            <div class="field-group">
-              <label class="field-label">CPU sockets <span style="color:var(--pex-text-muted);font-weight:400">(min 2)</span></label>
-              <input type="number" v-model.number="cpuSocketCount" min="2" max="16" step="1" />
-            </div>
-          </div>
-
-          <div class="field-row">
-            <div class="field-group">
-              <label class="field-label">
-                Base clock —
-                <strong :style="cpuClockGhz < CPU_MIN_CLOCK ? 'color:var(--warn-amber)' : 'color:var(--pex-teal-dark)'">
-                  {{ cpuClockGhz.toFixed(1) }} GHz
-                  <span v-if="cpuClockGhz < CPU_MIN_CLOCK"> ⚠</span>
-                </strong>
-              </label>
-              <div class="slider-row">
-                <input type="range" v-model.number="cpuClockGhz" min="2.6" max="4.5" step="0.1" />
-                <span class="slider-value" :style="cpuClockGhz < CPU_MIN_CLOCK ? 'color:var(--warn-amber)' : ''">
-                  {{ cpuClockGhz.toFixed(1) }}
+            <div class="hw-summary-chip">
+              <span class="chip-label">Nodes</span>
+              <div class="chip-node-counts">
+                <span class="chip-node-item">
+                  <span class="chip-node-n">{{ hwAllocationSummary.totalTranscoding }}</span>
+                  <span class="chip-node-type">Conf.</span>
+                </span>
+                <span class="chip-node-sep">·</span>
+                <span class="chip-node-item">
+                  <span class="chip-node-n">{{ hwAllocationSummary.totalProxy }}</span>
+                  <span class="chip-node-type">Proxy</span>
                 </span>
               </div>
             </div>
-            <div class="field-group">
-              <label class="field-label">Hyperthreading</label>
-              <div class="radio-group" style="margin-top:6px">
-                <div class="radio-option">
-                  <input type="radio" id="ht-off" :value="false" v-model="hyperthreading" />
-                  <label for="ht-off">OFF (1:1 vCPU/core)</label>
-                </div>
-                <div class="radio-option">
-                  <input type="radio" id="ht-on" :value="true" v-model="hyperthreading" />
-                  <label for="ht-on">ON + NUMA-pinned (×2)</label>
-                </div>
+            <div class="hw-summary-chip"
+                 :class="hwAllocationSummary.totalHDCapacity < totalHDWithHeadroom && servers.length > 0 ? 'hw-chip-warn' : ''">
+              <span class="chip-label">HD Capacity</span>
+              <span class="chip-value">{{ fmtHD(hwAllocationSummary.totalHDCapacity) }}</span>
+              <span class="chip-unit">HD</span>
+            </div>
+            <div class="hw-summary-chip">
+              <span class="chip-label">vCPU</span>
+              <span class="chip-value">{{ hwAllocationSummary.totalVCPUAllocated }}<span class="chip-slash">/</span>{{ hwAllocationSummary.totalVCPUCapacity }}</span>
+              <span class="chip-unit">allocated / available</span>
+            </div>
+            <div class="hw-summary-chip">
+              <span class="chip-label">RAM</span>
+              <span class="chip-value">{{ hwAllocationSummary.totalRAMAllocated }}<span class="chip-slash">/</span>{{ hwAllocationSummary.totalRAMCapacity }}</span>
+              <span class="chip-unit">GB allocated / available</span>
+            </div>
+          </div>
+
+          <!-- ── Tab bar ───────────────────────────────────────────────────── -->
+          <div class="hw-tab-bar">
+            <button class="hw-tab" :class="{ active: hwActiveTab === 'servers' }"
+                    @click="hwActiveTab = 'servers'">① Servers</button>
+            <button class="hw-tab" :class="{ active: hwActiveTab === 'nodes' }"
+                    @click="hwActiveTab = 'nodes'">② Configure Nodes</button>
+          </div>
+
+          <!-- ── Tab: Servers ──────────────────────────────────────────────── -->
+          <div v-show="hwActiveTab === 'servers'">
+
+            <div v-if="servers.length === 0" class="no-nodes-hint" style="text-align:center;padding:24px 0;font-style:normal">
+              No servers defined yet. Add your first server to begin hardware sizing.
+            </div>
+
+            <!-- Server cards -->
+            <div class="server-card" v-for="(server, idx) in servers" :key="server.id">
+
+              <!-- Card header (always visible) -->
+              <div class="server-card-header" @click="toggleServer(server.id)">
+                <span class="location-expand-icon">{{ server.expanded ? '▾' : '▸' }}</span>
+                <input type="text" v-model="server.name" placeholder="Server name (e.g. Dell R650)"
+                       @click.stop class="server-name-input" />
+                <select v-model="server.locationId" @click.stop class="server-location-select">
+                  <option :value="null">— Location —</option>
+                  <option v-for="loc in locations" :key="loc.id" :value="loc.id">{{ loc.name || 'Unnamed' }}</option>
+                </select>
+                <span class="server-qty-label">Qty:</span>
+                <input type="number" v-model.number="server.quantity" min="1" max="99" @click.stop
+                       class="server-qty-input" />
+                <span class="server-hd-badge" v-if="serverAllocations[idx] && serverAllocations[idx].hdPerServer > 0">
+                  ~{{ fmtHD(serverAllocations[idx].hdPerServer) }} HD/server
+                </span>
+                <button class="btn-duplicate" @click.stop="duplicateServer(server.id)" title="Duplicate server">⧉</button>
+                <button class="btn-remove" @click.stop="removeServer(server.id)" title="Remove server">✕</button>
               </div>
+
+              <!-- Card body (collapsed/expanded) -->
+              <div class="server-card-body" v-show="server.expanded">
+
+                <!-- CPU ── -->
+                <div class="server-section-label">CPU</div>
+                <div class="field-row">
+                  <div class="field-group">
+                    <label class="field-label">Sockets per server</label>
+                    <input type="number" v-model.number="server.socketsPerServer" min="1" max="16" />
+                  </div>
+                  <div class="field-group">
+                    <label class="field-label">Physical cores per socket</label>
+                    <input type="number" v-model.number="server.physicalCoresPerSocket" min="4" max="128" />
+                  </div>
+                </div>
+                <div class="field-row">
+                  <div class="field-group">
+                    <label class="field-label">
+                      Base clock —
+                      <strong :style="server.baseClockGhz < CPU_MIN_CLOCK ? 'color:var(--warn-amber)' : 'color:var(--pex-teal-dark)'">
+                        {{ server.baseClockGhz.toFixed(1) }} GHz
+                        <span v-if="server.baseClockGhz < CPU_MIN_CLOCK"> ⚠</span>
+                      </strong>
+                    </label>
+                    <div class="slider-row">
+                      <input type="range" v-model.number="server.baseClockGhz" min="2.6" max="4.5" step="0.1" />
+                      <span class="slider-value"
+                            :style="server.baseClockGhz < CPU_MIN_CLOCK ? 'color:var(--warn-amber)' : ''">
+                        {{ server.baseClockGhz.toFixed(1) }}
+                      </span>
+                    </div>
+                  </div>
+                  <div class="field-group">
+                    <label class="field-label">Hyperthreading</label>
+                    <div class="radio-group" style="margin-top:6px">
+                      <div class="radio-option">
+                        <input type="radio" :id="'ht-off-' + server.id" :value="false" v-model="server.hyperthreading" />
+                        <label :for="'ht-off-' + server.id">OFF (1:1)</label>
+                      </div>
+                      <div class="radio-option">
+                        <input type="radio" :id="'ht-on-' + server.id" :value="true" v-model="server.hyperthreading" />
+                        <label :for="'ht-on-' + server.id">ON + NUMA-pinned (×2)</label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <!-- Memory & Hypervisor ── -->
+                <div class="server-section-label" style="margin-top:12px">Memory &amp; Hypervisor</div>
+                <div class="field-row">
+                  <div class="field-group">
+                    <label class="field-label">Total RAM (GB)</label>
+                    <input type="number" v-model.number="server.totalRAM" min="8" max="4096" step="8" />
+                  </div>
+                  <div class="field-group">
+                    <label class="field-label">Hypervisor</label>
+                    <select v-model="server.hypervisor">
+                      <option value="vmware">VMware (1.0×)</option>
+                      <option value="kvm">KVM (0.95×)</option>
+                      <option value="hyperv">Hyper-V (0.90×)</option>
+                      <option value="cloud">Cloud / hosted (1.0×)</option>
+                    </select>
+                  </div>
+                </div>
+
+              </div><!-- /server-card-body -->
+            </div><!-- /server-card -->
+
+            <!-- Primary "Add Server" CTA -->
+            <button class="btn-add btn-add-location" style="margin-top:4px"
+                    @click="addServer">＋ Add Server</button>
+
+          </div><!-- /Tab: Servers -->
+
+          <!-- ── Tab: Configure Nodes ──────────────────────────────────────── -->
+          <div v-show="hwActiveTab === 'nodes'">
+            <div v-if="servers.length === 0" class="no-nodes-hint"
+                 style="text-align:center;padding:24px;font-style:normal">
+              Add servers in the Servers tab first, then allocate nodes here.
             </div>
-          </div>
 
-          <!-- Computed hardware capacity summary -->
-          <div class="section-divider"></div>
-          <div class="breakdown-row">
-            <span class="bd-label">Total physical cores</span>
-            <span class="bd-val">{{ totalPhysicalCores }} cores ({{ cpuCoresPerSocket }} × {{ cpuSocketCount }} sockets)</span>
-          </div>
-          <div class="breakdown-row">
-            <span class="bd-label">Total vCPU available</span>
-            <span class="bd-val" :style="vCPURequired > totalAvailableVCPU ? 'color:var(--warn-amber)' : 'color:var(--success)'">
-              {{ totalAvailableVCPU }} vCPU
-              <span style="font-weight:400;color:var(--pex-text-muted)">
-                ({{ totalPhysicalCores }} cores × {{ hyperthreading ? '2 with HT' : '1 without HT' }})
-              </span>
-            </span>
-          </div>
-          <div class="breakdown-row">
-            <span class="bd-label">Conferencing nodes</span>
-            <span class="bd-val">{{ recommendedNodeCount }} node{{ recommendedNodeCount !== 1 ? 's' : '' }}
-              <span style="font-weight:400;color:var(--pex-text-muted)">
-                (floor({{ totalPhysicalCores }} ÷ 22), NUMA-pinned per socket)
-              </span>
-            </span>
-          </div>
-          <div class="breakdown-row">
-            <span class="bd-label">vCPU per node</span>
-            <span class="bd-val">{{ vCPUPerNode }} vCPU</span>
-          </div>
-          <div class="breakdown-row">
-            <span class="bd-label">RAM per node</span>
-            <span class="bd-val">{{ ramPerNode }} GB <span style="font-weight:400;color:var(--pex-text-muted)">(1 GB/vCPU, rounded to standard)</span></span>
-          </div>
-
-          <div class="section-divider"></div>
-
-          <div class="field-row">
-            <div class="field-group">
-              <label class="field-label">Instruction Set Support</label>
-              <div class="radio-group" style="margin-top:6px">
-                <div class="radio-option">
-                  <input type="radio" id="isa-avx2" value="avx2" v-model="cpuInstructionSet" />
-                  <label for="isa-avx2">AVX2</label>
-                </div>
-                <div class="radio-option">
-                  <input type="radio" id="isa-avx512" value="avx512" v-model="cpuInstructionSet" />
-                  <label for="isa-avx512">AVX-512</label>
-                </div>
+            <!-- Show same server cards, but node allocation is auto-expanded (see watch in app.js) -->
+            <div class="server-card" v-for="(server, idx) in servers" :key="server.id">
+              <div class="server-card-header">
+                <span class="server-name-ro">{{ server.name || ('Server ' + (idx + 1)) }}</span>
+                <span class="server-location-ro" v-if="server.locationId">
+                  {{ locations.find(l => l.id === server.locationId)?.name || 'Unknown' }}
+                </span>
+                <span style="margin-left:auto;font-size:11px;color:var(--pex-text-muted)">
+                  Qty: {{ server.quantity }}
+                  · {{ serverAllocations[idx] ? serverAllocations[idx].totalVCPU : 0 }} vCPU
+                  · {{ server.totalRAM }} GB RAM
+                  · {{ serverAllocations[idx] ? fmtHD(serverAllocations[idx].hdPerServer) : '0.00' }} HD/server
+                </span>
               </div>
-            </div>
-            <div class="field-group">
-              <label class="field-label">Hypervisor</label>
-              <select v-model="hypervisor" style="margin-top:6px">
-                <option value="vmware">VMware (1.0×)</option>
-                <option value="kvm">KVM (0.95×)</option>
-                <option value="hyperv">Hyper-V (0.90×)</option>
-                <option value="cloud">Cloud / hosted (1.0×)</option>
-              </select>
-            </div>
-          </div>
+              <div class="server-card-body">
 
-          <div class="inline-note">
-            <strong>NUMA rules:</strong> Minimum 2 sockets. Each conferencing node is pinned to one socket (~22 physical cores each).
+                <!-- Socket bars -->
+                <div class="server-socket-summary" v-if="serverAllocations[idx]">
+                  <div class="socket-row"
+                       v-for="sock in serverAllocations[idx].socketBreakdown" :key="sock.socket">
+                    <span class="socket-label">Socket {{ sock.socket }}</span>
+                    <div class="resource-bar-track" style="flex:1;max-width:130px">
+                      <div class="resource-bar-fill"
+                           :class="sock.remaining < 0 ? 'resource-bar-over' : ''"
+                           :style="{ width: Math.min(100, sock.total > 0 ? (sock.used / sock.total * 100) : 0) + '%' }">
+                      </div>
+                    </div>
+                    <span class="socket-threads-label"
+                          :style="sock.remaining < 0 ? 'color:var(--warn-amber)' : ''">
+                      {{ sock.used }} / {{ sock.total }} threads
+                      <span style="color:var(--pex-text-muted)"> · {{ sock.remaining }} remaining</span>
+                    </span>
+                  </div>
+                </div>
+
+                <!-- Node table (same as servers tab) -->
+                <p class="no-nodes-hint" v-if="server.nodes.length === 0">
+                  No nodes allocated — click "Add Node" below.
+                </p>
+                <table class="node-alloc-table" v-else>
+                  <thead>
+                    <tr>
+                      <th>Node Name</th><th>Role</th><th>Socket</th>
+                      <th class="num">vCPU</th><th class="num">RAM (GB)</th>
+                      <th>Location</th><th class="num">~HD</th><th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="node in server.nodes" :key="node.id">
+                      <td><input type="text" v-model="node.name"
+                                 placeholder="conf-east-01" style="width:110px" /></td>
+                      <td>
+                        <select v-model="node.role" @change="applyRoleDefaults(node, server)">
+                          <option value="transcoding">Transcoding</option>
+                          <option value="proxy">Proxying Edge</option>
+                          <option value="management">Management</option>
+                        </select>
+                      </td>
+                      <td>
+                        <select v-model.number="node.socketNUMA">
+                          <option v-for="s in server.socketsPerServer" :key="s" :value="s">Socket {{ s }}</option>
+                        </select>
+                      </td>
+                      <td><input type="number" v-model.number="node.vCPU" min="1"
+                                 style="width:56px;text-align:right" /></td>
+                      <td><input type="number" v-model.number="node.ram" min="1"
+                                 style="width:56px;text-align:right" /></td>
+                      <td class="node-loc-ro">
+                        {{ server.locationId
+                            ? (locations.find(l => l.id === server.locationId)?.name || 'Unknown')
+                            : '—' }}
+                      </td>
+                      <td class="num" style="color:var(--pex-teal-dark);font-weight:600">
+                        {{ node.role === 'transcoding' ? fmtHD(serverNodeHD(node)) + ' HD' : '—' }}
+                      </td>
+                      <td>
+                        <button class="btn-remove"
+                                @click="removeNodeFromServer(server.id, node.id)">✕</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div v-if="serverAllocations[idx] && serverAllocations[idx].remainingVCPU < 0"
+                     style="color:var(--warn-amber);font-size:12px;margin-top:4px">
+                  ⚠ Over-allocated by {{ Math.abs(serverAllocations[idx].remainingVCPU) }} vCPU
+                </div>
+
+                <button class="btn-add" style="margin-top:8px"
+                        @click="addNodeToServer(server.id)">＋ Add Node</button>
+
+              </div>
+            </div><!-- /server-card (configure nodes tab) -->
+
+          </div><!-- /Tab: Configure Nodes -->
+
+          <div class="inline-note" style="margin-top:14px">
+            <strong>NUMA rules:</strong> Each conferencing node should be pinned to one socket (~22 physical cores).
             Hyperthreading doubles logical threads — enable only with strict NUMA VM pinning.
-            Minimum recommended base clock: 2.6 GHz.
+            Minimum recommended base clock: 2.6 GHz. Nodes defined here auto-populate the topology in ②.
           </div>
+
         </div>
       </div>
 
@@ -618,6 +781,18 @@
           <div class="breakdown-row" style="margin-top:8px">
             <span class="bd-label">Conferencing nodes ({{ vCPUPerNode }} vCPU / {{ ramPerNode }} GB each)</span>
             <span class="bd-val">{{ transcodingNodeCount }} node{{ transcodingNodeCount !== 1 ? 's' : '' }}</span>
+          </div>
+
+          <!-- Hardware capacity vs required (only when servers are defined) -->
+          <div v-if="totalRawHDCapacity > 0" class="breakdown-row" style="margin-top:8px">
+            <span class="bd-label">Hardware HD capacity</span>
+            <span class="bd-val"
+                  :style="totalRawHDCapacity < totalHDWithHeadroom ? 'color:var(--warn-amber)' : 'color:var(--success)'">
+              {{ fmtHD(totalRawHDCapacity) }} HD
+              <span style="font-weight:400;color:var(--pex-text-muted)">
+                ({{ totalRawHDCapacity >= totalHDWithHeadroom ? '✓ sufficient' : '⚠ insufficient' }})
+              </span>
+            </span>
           </div>
 
           <div style="margin-top:14px">
@@ -865,37 +1040,45 @@
       <div class="result-card">
         <div class="result-card-header">CPU Efficiency Model</div>
         <div class="result-card-body">
-          <div class="efficiency-row">
-            <span class="efficiency-label">Base ({{ cpuInstructionSet.toUpperCase() }})</span>
-            <span class="efficiency-val">{{ EFFICIENCY_BASE[cpuInstructionSet] }} HD/vCPU</span>
+          <div v-if="!primaryServer" class="no-data" style="font-style:italic">
+            Add a server in ④ Hardware Builder to see the CPU efficiency breakdown.
           </div>
-          <div class="efficiency-row">
-            <span class="efficiency-label">Clock factor ({{ cpuClockGhz.toFixed(1) }} ÷ 2.8 ref)</span>
-            <span class="efficiency-val">{{ (cpuClockGhz / 2.8).toFixed(2) }}×</span>
-          </div>
-          <div class="efficiency-row">
-            <span class="efficiency-label">Hyperthreading factor</span>
-            <span class="efficiency-val">{{ hyperthreading ? '1.40×' : '1.00×' }}</span>
-          </div>
-          <div class="efficiency-row">
-            <span class="efficiency-label">Hypervisor factor</span>
-            <span class="efficiency-val">{{ HV_FACTORS[hypervisor].toFixed(2) }}×</span>
-          </div>
-          <div class="section-divider"></div>
-          <div class="efficiency-row">
-            <span class="efficiency-label" style="font-weight:700;color:var(--pex-text)">
-              Effective HD/vCPU
-            </span>
-            <span class="efficiency-val" style="font-size:18px">{{ effectiveHDperVcpu.toFixed(2) }}</span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill"
-              :style="{ width: Math.min(100, (effectiveHDperVcpu / 10) * 100) + '%' }">
+          <template v-else>
+            <p style="font-size:11px;color:var(--pex-text-muted);margin:0 0 8px">
+              Based on primary server: <strong>{{ primaryServer.name || 'Server 1' }}</strong>
+            </p>
+            <div class="efficiency-row">
+              <span class="efficiency-label">Base (AVX2 baseline)</span>
+              <span class="efficiency-val">4.0 HD/vCPU</span>
             </div>
-          </div>
-          <p class="text-muted" style="margin-top:6px">
-            Scale: 0–10 HD/vCPU. Reference 6.0 = AVX-512 @ 2.8 GHz baseline.
-          </p>
+            <div class="efficiency-row">
+              <span class="efficiency-label">Clock factor ({{ primaryServer.baseClockGhz.toFixed(1) }} ÷ 2.8 ref)</span>
+              <span class="efficiency-val">{{ (primaryServer.baseClockGhz / 2.8).toFixed(2) }}×</span>
+            </div>
+            <div class="efficiency-row">
+              <span class="efficiency-label">Hyperthreading factor</span>
+              <span class="efficiency-val">{{ primaryServer.hyperthreading ? '1.40×' : '1.00×' }}</span>
+            </div>
+            <div class="efficiency-row">
+              <span class="efficiency-label">Hypervisor factor</span>
+              <span class="efficiency-val">{{ HV_FACTORS[primaryServer.hypervisor].toFixed(2) }}×</span>
+            </div>
+            <div class="section-divider"></div>
+            <div class="efficiency-row">
+              <span class="efficiency-label" style="font-weight:700;color:var(--pex-text)">
+                Effective HD/vCPU
+              </span>
+              <span class="efficiency-val" style="font-size:18px">{{ effectiveHDperVcpu.toFixed(2) }}</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill"
+                :style="{ width: Math.min(100, (effectiveHDperVcpu / 10) * 100) + '%' }">
+              </div>
+            </div>
+            <p class="text-muted" style="margin-top:6px">
+              Scale: 0–10 HD/vCPU. Reference 6.0 = AVX-512 @ 2.8 GHz baseline.
+            </p>
+          </template>
         </div>
       </div>
 
@@ -910,7 +1093,6 @@
             <li><a href="https://docs.pexip.com/admin/edge_guidelines.htm" target="_blank" rel="noopener">Edge Node Guidelines</a></li>
             <li><a href="https://docs.pexip.com/server_design/numa_best_practices.htm" target="_blank" rel="noopener">NUMA Best Practices</a></li>
             <li><a href="https://docs.pexip.com/admin/restricting_bandwidth.htm" target="_blank" rel="noopener">Bandwidth Restrictions</a></li>
-            <li><a href="https://www.eatyourbytes.com/list-of-cpus-with-avx512/" target="_blank" rel="noopener">CPUs with AVX-512 Reference</a></li>
           </ul>
         </div>
       </div>

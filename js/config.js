@@ -247,6 +247,26 @@ window.PEXIP = {
     external:    'External (Public-facing)',
   },
 
+  // Role labels for the hardware builder node allocation
+  NODE_ROLES_HW: {
+    transcoding: 'Transcoding Conferencing',
+    proxy:       'Proxying Edge',
+    management:  'Management',
+  },
+
+  // Default vCPU by role when adding a new node (null = computed from server socket spec)
+  DEFAULT_VCPU_BY_ROLE: {
+    transcoding: null,
+    proxy:       4,
+    management:  8,
+  },
+
+  // Default RAM (GB) by role for non-transcoding nodes
+  DEFAULT_RAM_BY_ROLE: {
+    proxy:      4,
+    management: 8,
+  },
+
   QUALITY_LABELS: {
     '1080p': 'Full HD (1080p)',
     '720p':  'HD (720p)',

@@ -1263,3 +1263,292 @@ footer a:hover { text-decoration: underline; }
   .results-panel { position: static; }
   body { background: #fff; }
 }
+
+/* ── Hardware Builder — Section 4 ──────────────────────────────────────────── */
+
+/* Allocation summary strip */
+.hw-allocation-summary {
+  display: flex;
+  align-items: stretch;
+  margin-bottom: 16px;
+  background: var(--pex-teal-light);
+  border: 1px solid rgba(0,155,141,0.25);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.hw-summary-chip {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 8px;
+  border-right: 1px solid rgba(0,155,141,0.18);
+  text-align: center;
+}
+.hw-summary-chip:last-child { border-right: none; }
+.hw-summary-chip .chip-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--pex-teal-dark);
+  margin-bottom: 3px;
+}
+.hw-summary-chip .chip-value {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--pex-navy);
+  line-height: 1;
+}
+.hw-summary-chip .chip-unit {
+  font-size: 9px;
+  color: var(--pex-text-muted);
+  margin-top: 2px;
+}
+.hw-summary-chip .chip-slash {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--pex-border);
+  margin: 0 1px;
+}
+.hw-chip-warn .chip-value { color: var(--warn-amber); }
+
+/* Nodes chip sub-layout */
+.chip-node-counts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 1px;
+}
+.chip-node-item {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.chip-node-n {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--pex-navy);
+  line-height: 1;
+}
+.chip-node-type {
+  font-size: 9px;
+  color: var(--pex-text-muted);
+  font-weight: 500;
+}
+.chip-node-sep {
+  font-size: 12px;
+  color: var(--pex-border);
+}
+
+/* Tab bar */
+.hw-tab-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 14px;
+  border-bottom: 2px solid var(--pex-border);
+}
+.hw-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  padding: 8px 18px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--pex-text-muted);
+  transition: color 0.15s, border-color 0.15s;
+}
+.hw-tab:hover { color: var(--pex-navy); }
+.hw-tab.active { color: var(--pex-teal-dark); border-bottom-color: var(--pex-teal); }
+
+/* Server cards */
+.server-card {
+  border: 1px solid var(--pex-border);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: var(--pex-card);
+}
+.server-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: var(--pex-bg);
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.server-card-header:hover { background: #EDF2F7; }
+.server-name-input {
+  flex: 1;
+  min-width: 130px;
+  max-width: 220px;
+  font-weight: 600;
+}
+.server-location-select {
+  flex: 0 0 auto;
+  min-width: 130px;
+  max-width: 180px;
+}
+.server-qty-label { font-size: 12px; color: var(--pex-text-muted); white-space: nowrap; }
+.server-qty-input  { width: 52px; max-width: 52px; flex: 0 0 52px; text-align: center; }
+.server-hd-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--pex-teal-dark);
+  background: var(--pex-teal-light);
+  border-radius: 4px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.server-card-body { padding: 12px 14px; }
+
+/* Server section labels */
+.server-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--pex-text-muted);
+  margin-bottom: 6px;
+}
+
+/* Computed CPU line under sliders */
+.server-compute-summary {
+  font-size: 11px;
+  color: var(--pex-text-muted);
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+.summary-sep { margin: 0 4px; opacity: 0.4; }
+
+/* Resource bars */
+.server-resource-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.resource-bar-label {
+  font-size: 11px;
+  font-weight: 600;
+  width: 34px;
+  color: var(--pex-slate);
+  flex-shrink: 0;
+}
+.resource-bar-track {
+  flex: 1;
+  height: 8px;
+  background: #EDF2F7;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.resource-bar-fill {
+  height: 100%;
+  background: var(--pex-teal);
+  border-radius: 4px;
+  transition: width 0.25s ease;
+}
+.resource-bar-fill.resource-bar-over { background: var(--warn-amber); }
+.resource-bar-value {
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--pex-text);
+}
+
+/* Socket breakdown */
+.server-socket-summary { margin: 8px 0 10px; }
+.socket-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.socket-label {
+  font-size: 11px;
+  font-weight: 600;
+  width: 60px;
+  color: var(--pex-slate);
+  flex-shrink: 0;
+}
+.socket-threads-label { font-size: 11px; color: var(--pex-text-muted); }
+
+/* Node allocation table */
+.node-alloc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+.node-alloc-table th {
+  background: var(--pex-bg);
+  padding: 5px 6px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pex-text-muted);
+  border-bottom: 1px solid var(--pex-border);
+  white-space: nowrap;
+}
+.node-alloc-table th.num, .node-alloc-table td.num { text-align: right; }
+.node-alloc-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid #EDF2F7;
+  vertical-align: middle;
+}
+.node-alloc-table tr:last-child td { border-bottom: none; }
+.node-alloc-table input, .node-alloc-table select { font-size: 12px; }
+.node-loc-ro { font-size: 12px; color: var(--pex-text-muted); }
+
+/* Physical capacity summary table footer */
+.capacity-summary-table tfoot td {
+  border-top: 2px solid var(--pex-border);
+  background: var(--pex-bg);
+  font-weight: 700;
+}
+
+/* Read-only node rows in Section 2 topology */
+.node-row-readonly {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  border-bottom: 1px solid #EDF2F7;
+  font-size: 12px;
+}
+.node-row-readonly:last-of-type { border-bottom: none; }
+.node-name-ro   { font-weight: 600; color: var(--pex-text); flex: 1; }
+.node-meta-ro   { color: var(--pex-text-muted); font-size: 11px; white-space: nowrap; }
+.node-hd-ro     { font-weight: 600; font-size: 11px; white-space: nowrap; }
+
+/* Node role badges (used in read-only node rows) */
+.badge-management {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #EDF2F7;
+  color: var(--pex-slate);
+  white-space: nowrap;
+}
+
+/* Configure Nodes tab — read-only server header */
+.server-name-ro {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--pex-navy);
+}
+.server-location-ro {
+  font-size: 11px;
+  color: var(--pex-text-muted);
+  background: var(--pex-bg);
+  border: 1px solid var(--pex-border);
+  border-radius: 4px;
+  padding: 2px 7px;
+}
