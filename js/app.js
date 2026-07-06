@@ -358,14 +358,14 @@
           ? popCh / maxCh : null;
 
         let instructionSetScore = 0;
-        if      (server.instructionSet === 'avx512') instructionSetScore = 0.07;
-        else if (server.instructionSet === 'avx2')   instructionSetScore = 0.04;
+        if      (server.instructionSet === 'avx512') instructionSetScore = 0.04;
+        else if (server.instructionSet === 'avx2')   instructionSetScore = 0.02;
 
         let baseClockScore = 0;
-        if      (server.baseClockGhz < 2.3) baseClockScore = -0.04;
-        else if (server.baseClockGhz < 2.6) baseClockScore =  0.00;
-        else if (server.baseClockGhz < 2.9) baseClockScore =  0.03;
-        else                                 baseClockScore =  0.05;
+        if      (server.baseClockGhz < 2.3) baseClockScore = -0.05;
+        else if (server.baseClockGhz < 2.6) baseClockScore = -0.02;
+        else if (server.baseClockGhz < 2.9) baseClockScore =  0.02;
+        else                                 baseClockScore =  0.04;
 
         let cacheScore = 0;
         if      (cachePerThread < 0.50) cacheScore = -0.02;
@@ -376,8 +376,8 @@
         let memChannelWidthScore = 0;
         if (maxCh != null) {
           if      (maxCh >= 8)  memChannelWidthScore =  0.03;
-          else if (maxCh === 6) memChannelWidthScore = -0.03;
-          else if (maxCh <= 4)  memChannelWidthScore = -0.05;
+          else if (maxCh === 6) memChannelWidthScore = -0.06;
+          else if (maxCh <= 4)  memChannelWidthScore = -0.08;
         }
 
         let memChannelPopScore = 0;
