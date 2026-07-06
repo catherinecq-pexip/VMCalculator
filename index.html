@@ -573,7 +573,7 @@
                       </strong>
                     </label>
                     <div class="slider-row">
-                      <input type="range" v-model.number="server.baseClockGhz" min="2.6" max="4.5" step="0.1" />
+                      <input type="range" v-model.number="server.baseClockGhz" min="1.8" max="4.5" step="0.1" />
                       <span class="slider-value"
                             :style="server.baseClockGhz < CPU_MIN_CLOCK ? 'color:var(--warn-amber)' : ''">
                         {{ server.baseClockGhz.toFixed(1) }}
@@ -594,21 +594,38 @@
                     </div>
                   </div>
                 </div>
-                <!-- Memory & Hypervisor ── -->
-                <div class="server-section-label" style="margin-top:12px">Memory &amp; Hypervisor</div>
+                <div class="field-row">
+                  <div class="field-group">
+                    <label class="field-label">CPU cache (MB)</label>
+                    <input type="number" v-model.number="server.cpuCacheMB" min="1" max="512" placeholder="36" />
+                  </div>
+                  <div class="field-group">
+                    <label class="field-label">Instruction set support</label>
+                    <select v-model="server.instructionSet">
+                      <option value="avx512">AVX-512</option>
+                      <option value="avx2">AVX2</option>
+                      <option value="avx">AVX / Basic</option>
+                      <option value="unknown">Unknown</option>
+                    </select>
+                  </div>
+                </div>
+                <!-- Memory ── -->
+                <div class="server-section-label" style="margin-top:12px">Memory</div>
                 <div class="field-row">
                   <div class="field-group">
                     <label class="field-label">Total RAM (GB)</label>
                     <input type="number" v-model.number="server.totalRAM" min="8" max="4096" step="8" />
                   </div>
                   <div class="field-group">
-                    <label class="field-label">Hypervisor</label>
-                    <select v-model="server.hypervisor">
-                      <option value="vmware">VMware (1.0×)</option>
-                      <option value="kvm">KVM (0.95×)</option>
-                      <option value="hyperv">Hyper-V (0.90×)</option>
-                      <option value="cloud">Cloud / hosted (1.0×)</option>
-                    </select>
+                    <label class="field-label">Max memory channels / socket</label>
+                    <input type="number" v-model.number="server.maxMemoryChannelsPerSocket" min="1" max="16" placeholder="optional" />
+                  </div>
+                </div>
+                <div class="field-row">
+                  <div class="field-group"></div>
+                  <div class="field-group">
+                    <label class="field-label">Populated channels / socket</label>
+                    <input type="number" v-model.number="server.populatedMemoryChannelsPerSocket" min="1" max="16" placeholder="optional" />
                   </div>
                 </div>
 
@@ -811,10 +828,6 @@
             <div class="breakdown-row" v-if="backplaneHD > 0">
               <span class="bd-label">Backplane (cross-location meetings)</span>
               <span class="bd-val bd-highlight">+{{ fmtHD(backplaneHD) }} HD</span>
-            </div>
-            <div class="breakdown-row">
-              <span class="bd-label">CPU efficiency</span>
-              <span class="bd-val">{{ effectiveHDperVcpu.toFixed(2) }} HD/vCPU</span>
             </div>
           </div>
         </div>
@@ -1036,47 +1049,156 @@
         </div>
       </div>
 
-      <!-- ── CPU Efficiency Detail ─────────────────────────────────────────── -->
+      <!-- ── Estimated Raw HD Capacity ────────────────────────────────────────── -->
       <div class="result-card">
-        <div class="result-card-header">CPU Efficiency Model</div>
+        <div class="result-card-header">Estimated Raw HD Capacity</div>
         <div class="result-card-body">
           <div v-if="!primaryServer" class="no-data" style="font-style:italic">
-            Add a server in ④ Hardware Builder to see the CPU efficiency breakdown.
+            Add a server in ④ Hardware Builder to see the HD capacity estimate.
           </div>
           <template v-else>
-            <p style="font-size:11px;color:var(--pex-text-muted);margin:0 0 8px">
+            <p style="font-size:11px;color:var(--pex-text-muted);margin:0 0 10px">
               Based on primary server: <strong>{{ primaryServer.name || 'Server 1' }}</strong>
             </p>
-            <div class="efficiency-row">
-              <span class="efficiency-label">Base (AVX2 baseline)</span>
-              <span class="efficiency-val">4.0 HD/vCPU</span>
+
+            <!-- Inferred estimate mode -->
+            <div class="efficiency-row" style="margin-bottom:6px">
+              <span class="efficiency-label" style="font-weight:700">Estimate mode</span>
+              <span :style="hdEstimateResult.inferredEstimateMode === 'Projected'
+                ? 'background:var(--pex-teal-light,#e6f7f5);color:var(--pex-teal-dark);padding:2px 10px;border-radius:10px;font-weight:700;font-size:12px'
+                : 'background:var(--pex-bg);color:var(--pex-text-muted);padding:2px 10px;border-radius:10px;font-weight:600;font-size:12px;border:1px solid var(--pex-border)'">
+                {{ hdEstimateResult.inferredEstimateMode }}
+              </span>
             </div>
+
+            <!-- K coefficient -->
             <div class="efficiency-row">
-              <span class="efficiency-label">Clock factor ({{ primaryServer.baseClockGhz.toFixed(1) }} ÷ 2.8 ref)</span>
-              <span class="efficiency-val">{{ (primaryServer.baseClockGhz / 2.8).toFixed(2) }}×</span>
-            </div>
-            <div class="efficiency-row">
-              <span class="efficiency-label">Hyperthreading factor</span>
-              <span class="efficiency-val">{{ primaryServer.hyperthreading ? '1.40×' : '1.00×' }}</span>
-            </div>
-            <div class="efficiency-row">
-              <span class="efficiency-label">Hypervisor factor</span>
-              <span class="efficiency-val">{{ HV_FACTORS[primaryServer.hypervisor].toFixed(2) }}×</span>
+              <span class="efficiency-label" style="font-weight:700;color:var(--pex-text)">Coefficient (K)</span>
+              <span class="efficiency-val" style="font-size:20px;font-weight:800">{{ hdEstimateResult.K.toFixed(3) }}</span>
             </div>
             <div class="section-divider"></div>
+
+            <!-- HD outputs -->
             <div class="efficiency-row">
-              <span class="efficiency-label" style="font-weight:700;color:var(--pex-text)">
-                Effective HD/vCPU
+              <span class="efficiency-label">Per-node raw HD estimate</span>
+              <span class="efficiency-val" style="font-size:15px;color:var(--pex-teal-dark)">{{ hdEstimateResult.nodeRawHD }} HD</span>
+            </div>
+            <div class="efficiency-row">
+              <span class="efficiency-label" style="font-weight:700">Total raw HD estimate</span>
+              <span class="efficiency-val" style="font-size:18px;font-weight:800;color:var(--pex-teal-dark)">{{ hdEstimateResult.totalRawHD }} HD</span>
+            </div>
+
+            <div class="section-divider" style="margin:10px 0"></div>
+
+            <!-- Calculation basis -->
+            <div style="font-size:11px;color:var(--pex-text-muted);margin-bottom:5px;font-weight:600;letter-spacing:0.02em;text-transform:uppercase">Calculation basis</div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Assigned vCPU per node</span>
+              <span class="efficiency-val">{{ hdEstimateResult.assignedVCPU }}</span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Number of Conferencing Nodes</span>
+              <span class="efficiency-val">{{ hdEstimateResult.numberOfNodes }}</span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Processor base frequency</span>
+              <span class="efficiency-val">{{ primaryServer.baseClockGhz.toFixed(1) }} GHz</span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Threads per socket</span>
+              <span class="efficiency-val">{{ hdEstimateResult.threadsPerSocket }}</span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">CPU cache per thread</span>
+              <span class="efficiency-val">{{ hdEstimateResult.cachePerThread.toFixed(2) }} MB/thread</span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Memory channel ratio</span>
+              <span class="efficiency-val">
+                {{ hdEstimateResult.memChannelRatio !== null ? hdEstimateResult.memChannelRatio.toFixed(2) : '— not set' }}
               </span>
-              <span class="efficiency-val" style="font-size:18px">{{ effectiveHDperVcpu.toFixed(2) }}</span>
             </div>
-            <div class="progress-bar">
-              <div class="progress-fill"
-                :style="{ width: Math.min(100, (effectiveHDperVcpu / 10) * 100) + '%' }">
-              </div>
+
+            <div class="section-divider" style="margin:8px 0"></div>
+            <div style="font-size:11px;color:var(--pex-text-muted);margin-bottom:5px;font-weight:600;letter-spacing:0.02em;text-transform:uppercase">Score components</div>
+
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Instruction set score</span>
+              <span class="efficiency-val"
+                    :style="hdEstimateResult.instructionSetScore > 0 ? 'color:var(--pex-teal-dark)' : 'color:var(--pex-text-muted)'">
+                {{ hdEstimateResult.instructionSetScore >= 0 ? '+' : '' }}{{ hdEstimateResult.instructionSetScore.toFixed(2) }}
+              </span>
             </div>
-            <p class="text-muted" style="margin-top:6px">
-              Scale: 0–10 HD/vCPU. Reference 6.0 = AVX-512 @ 2.8 GHz baseline.
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Base clock score</span>
+              <span class="efficiency-val"
+                    :style="hdEstimateResult.baseClockScore < 0 ? 'color:var(--warn-amber)' : hdEstimateResult.baseClockScore > 0 ? 'color:var(--pex-teal-dark)' : 'color:var(--pex-text-muted)'">
+                {{ hdEstimateResult.baseClockScore >= 0 ? '+' : '' }}{{ hdEstimateResult.baseClockScore.toFixed(2) }}
+              </span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Cache score</span>
+              <span class="efficiency-val"
+                    :style="hdEstimateResult.cacheScore < 0 ? 'color:var(--warn-amber)' : hdEstimateResult.cacheScore > 0 ? 'color:var(--pex-teal-dark)' : 'color:var(--pex-text-muted)'">
+                {{ hdEstimateResult.cacheScore >= 0 ? '+' : '' }}{{ hdEstimateResult.cacheScore.toFixed(2) }}
+              </span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Memory channel width score</span>
+              <span class="efficiency-val"
+                    :style="hdEstimateResult.memChannelWidthScore < 0 ? 'color:var(--warn-amber)' : hdEstimateResult.memChannelWidthScore > 0 ? 'color:var(--pex-teal-dark)' : 'color:var(--pex-text-muted)'">
+                {{ hdEstimateResult.memChannelWidthScore >= 0 ? '+' : '' }}{{ hdEstimateResult.memChannelWidthScore.toFixed(2) }}
+              </span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Memory channel population score</span>
+              <span class="efficiency-val"
+                    :style="hdEstimateResult.memChannelPopScore < 0 ? 'color:var(--warn-amber)' : hdEstimateResult.memChannelPopScore > 0 ? 'color:var(--pex-teal-dark)' : 'color:var(--pex-text-muted)'">
+                {{ hdEstimateResult.memChannelPopScore >= 0 ? '+' : '' }}{{ hdEstimateResult.memChannelPopScore.toFixed(2) }}
+              </span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Node size score</span>
+              <span class="efficiency-val"
+                    :style="hdEstimateResult.nodeSizeScore < 0 ? 'color:var(--warn-amber)' : 'color:var(--pex-text-muted)'">
+                {{ hdEstimateResult.nodeSizeScore >= 0 ? '+' : '' }}{{ hdEstimateResult.nodeSizeScore.toFixed(2) }}
+              </span>
+            </div>
+
+            <!-- K derivation -->
+            <div class="section-divider" style="margin:8px 0"></div>
+            <div style="font-size:11px;color:var(--pex-text-muted);margin-bottom:5px;font-weight:600;letter-spacing:0.02em;text-transform:uppercase">K Derivation</div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Raw K (sum of scores)</span>
+              <span class="efficiency-val">{{ hdEstimateResult.rawK.toFixed(3) }}</span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Mode adjustment</span>
+              <span class="efficiency-val"
+                    :style="hdEstimateResult.modeAdjustment > 0 ? 'color:var(--pex-teal-dark)' : 'color:var(--pex-text-muted)'">
+                {{ hdEstimateResult.modeAdjustment >= 0 ? '+' : '' }}{{ hdEstimateResult.modeAdjustment.toFixed(2) }}
+              </span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Coefficient ceiling</span>
+              <span class="efficiency-val">{{ hdEstimateResult.selectedCeiling.toFixed(2) }}</span>
+            </div>
+            <div class="efficiency-row" style="font-size:11px">
+              <span class="efficiency-label">Final K (clamped)</span>
+              <span class="efficiency-val" style="font-weight:700">{{ hdEstimateResult.K.toFixed(3) }}</span>
+            </div>
+
+            <!-- Notes -->
+            <div v-if="hdEstimateResult.instructionSetUnknown" class="inline-note" style="margin-top:8px;font-size:11px">
+              Instruction set not confirmed — estimate may be conservative. Select the instruction set in ④ for a more accurate result.
+            </div>
+            <div v-if="hdEstimateResult.memChannelsMissing" class="inline-note" style="margin-top:4px;font-size:11px">
+              Memory channel inputs not set — channel scoring was not applied. Enter max and populated channels in ④ for a more accurate result.
+            </div>
+
+            <div class="section-divider" style="margin:12px 0"></div>
+            <p style="font-size:11px;color:var(--pex-text-muted);line-height:1.6;margin:0">
+              This is an estimated raw HD compute capacity. It represents the server or node HD compute bucket, not usable participant capacity. Usable participant capacity must be calculated separately based on Pexip resource allocation rules for call type, codecs, presentations, backplanes, gateway legs, and layouts.
             </p>
           </template>
         </div>

@@ -138,27 +138,15 @@ window.PEXIP = {
   BACKPLANE_THUMB_MAX_KBPS:    192,
   BACKPLANE_PRESENTATION_KBPS: 1600,
 
-  // Base HD connections per vCPU by instruction set (reference clock: 2.8 GHz)
-  // Calibrated from Pexip NUMA docs: Xeon Gold 6342 (AVX-512, 2.8 GHz) ≈ 195 HD / 2 nodes / 16 vCPU each
-  CPU_EFFICIENCY_TABLE: {
-    avx2:   4.0,
-    avx512: 6.0,
-  },
-
-  CPU_REFERENCE_CLOCK: 2.8, // GHz
-  CPU_MIN_CLOCK_GHZ:   2.6, // minimum recommended base clock for Pexip nodes
+  CPU_MIN_CLOCK_GHZ:    2.6, // minimum recommended base clock for Pexip nodes
   CORES_PER_NODE_TARGET: 22, // physical cores per conferencing node target
 
-  // Hyperthreading bonus — only valid when VMs are NUMA-pinned to socket
-  HT_BONUS_FACTOR: 1.4,
-
-  // Hypervisor performance factors
-  HYPERVISOR_FACTORS: {
-    vmware:  1.0,
-    kvm:     0.95,
-    hyperv:  0.90,
-    cloud:   1.0,
-  },
+  // K coefficient model constants
+  COEFF_FLOOR:                0.58,
+  COEFF_CEILING_CONSERVATIVE: 0.78,
+  COEFF_CEILING_PROJECTED:    0.83,
+  PROJECTED_MODE_ADJUSTMENT:  0.04,
+  BASE_COEFF:                 0.62,
 
   // Supported transcoding node vCPU sizes
   NODE_SIZES: [16, 24, 32, 48],

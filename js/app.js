@@ -345,14 +345,97 @@
         return 256;
       }
 
+      // Compute K coefficient and all intermediate scores for a server + node combination
+      function computeK(server, node) {
+        const vCPU             = node?.vCPU ?? 48;
+        const threadsPerSocket = server.physicalCoresPerSocket * (server.hyperthreading ? 2 : 1);
+        const cpuCacheMB       = server.cpuCacheMB ?? 36;
+        const cachePerThread   = vCPU > 0 ? cpuCacheMB / vCPU : 0;
+
+        const maxCh  = server.maxMemoryChannelsPerSocket   ?? null;
+        const popCh  = server.populatedMemoryChannelsPerSocket ?? null;
+        const memChannelRatio = (maxCh != null && popCh != null && maxCh > 0)
+          ? popCh / maxCh : null;
+
+        let instructionSetScore = 0;
+        if      (server.instructionSet === 'avx512') instructionSetScore = 0.07;
+        else if (server.instructionSet === 'avx2')   instructionSetScore = 0.04;
+
+        let baseClockScore = 0;
+        if      (server.baseClockGhz < 2.3) baseClockScore = -0.04;
+        else if (server.baseClockGhz < 2.6) baseClockScore =  0.00;
+        else if (server.baseClockGhz < 2.9) baseClockScore =  0.03;
+        else                                 baseClockScore =  0.05;
+
+        let cacheScore = 0;
+        if      (cachePerThread < 0.50) cacheScore = -0.02;
+        else if (cachePerThread < 0.75) cacheScore =  0.00;
+        else if (cachePerThread < 1.25) cacheScore =  0.02;
+        else                             cacheScore =  0.04;
+
+        let memChannelWidthScore = 0;
+        if (maxCh != null) {
+          if      (maxCh >= 8)  memChannelWidthScore =  0.03;
+          else if (maxCh === 6) memChannelWidthScore = -0.03;
+          else if (maxCh <= 4)  memChannelWidthScore = -0.05;
+        }
+
+        let memChannelPopScore = 0;
+        if (memChannelRatio !== null) {
+          if      (memChannelRatio >= 1.00) memChannelPopScore =  0.00;
+          else if (memChannelRatio >= 0.75) memChannelPopScore = -0.03;
+          else                               memChannelPopScore = -0.08;
+        }
+
+        let nodeSizeScore = 0;
+        if      (vCPU > 56)  nodeSizeScore = -0.06;
+        else if (vCPU >= 49) nodeSizeScore = -0.02;
+
+        const rawK = C.BASE_COEFF + instructionSetScore + baseClockScore + cacheScore
+          + memChannelWidthScore + memChannelPopScore + nodeSizeScore;
+
+        // Projected eligibility — all conditions must hold to unlock higher ceiling
+        const projectedEligible = (
+          server.instructionSet === 'avx512' &&
+          maxCh != null && popCh != null &&
+          maxCh >= 8 &&
+          Number(popCh) === Number(maxCh) &&
+          cachePerThread >= 1.25 &&
+          server.baseClockGhz >= 2.6 &&
+          vCPU >= 4 && vCPU <= 56 &&
+          (node?.ram ?? 0) >= vCPU
+        );
+
+        const inferredEstimateMode = projectedEligible ? 'Projected'                    : 'Conservative';
+        const modeAdjustment       = projectedEligible ? C.PROJECTED_MODE_ADJUSTMENT     : 0;
+        const selectedCeiling      = projectedEligible ? C.COEFF_CEILING_PROJECTED       : C.COEFF_CEILING_CONSERVATIVE;
+        const K = Math.max(C.COEFF_FLOOR, Math.min(selectedCeiling, rawK + modeAdjustment));
+
+        return {
+          K,
+          rawK,
+          inferredEstimateMode,
+          modeAdjustment,
+          selectedCeiling,
+          threadsPerSocket,
+          cachePerThread,
+          memChannelRatio,
+          instructionSetScore,
+          baseClockScore,
+          cacheScore,
+          memChannelWidthScore,
+          memChannelPopScore,
+          nodeSizeScore,
+          memChannelsMissing:    maxCh == null || popCh == null,
+          instructionSetUnknown: !server.instructionSet || server.instructionSet === 'unknown' || server.instructionSet === 'avx',
+        };
+      }
+
       // HD capacity contributed by one transcoding node, given its server's specs
       function nodeHDCapacity(node, server) {
         if (node.role !== 'transcoding') return 0;
-        return node.vCPU
-          * 4.0
-          * (server.baseClockGhz / C.CPU_REFERENCE_CLOCK)
-          * (server.hyperthreading ? C.HT_BONUS_FACTOR : 1.0)
-          * (C.HYPERVISOR_FACTORS[server.hypervisor] ?? 1.0);
+        const { K } = computeK(server, node);
+        return Math.floor(node.vCPU * server.baseClockGhz * K);
       }
 
       // Look up a node's server and return its HD capacity (used from template + Section 2)
@@ -373,8 +456,11 @@
           physicalCoresPerSocket: 24,
           baseClockGhz:         3.0,
           hyperthreading:       false,
-          hypervisor:           'vmware',
+          cpuCacheMB:           36,
+          instructionSet:       'unknown',
           totalRAM:             64,
+          maxMemoryChannelsPerSocket:    8,
+          populatedMemoryChannelsPerSocket: 8,
           nodes:                [],
         });
       }
@@ -450,7 +536,7 @@
         if (tab === 'nodes') servers.forEach(s => { s.nodesExpanded = true; });
       });
 
-      // Primary server = first defined server (used for effectiveHDperVcpu fallback, CPU model card)
+      // Primary server = first defined server (used for hdEstimateResult and per-node display)
       const primaryServer = computed(() => servers[0] ?? null);
 
       // Total vCPU capacity across all servers (quantity-weighted)
@@ -810,14 +896,27 @@
       const totalHDRaw          = computed(() => totalHDBeforeBackplane.value + backplaneHD.value);
       const totalHDWithHeadroom = computed(() => totalHDRaw.value * C.HEADROOM_FACTOR);
 
-      // ── step 6: CPU efficiency — derived from primary (first) server ─────
-      const effectiveHDperVcpu = computed(() => {
+      // ── step 6: HD estimate result — for the Estimated Raw HD Capacity card ──
+      const hdEstimateResult = computed(() => {
         const s = primaryServer.value;
-        if (!s) return 4.0 * (3.0 / C.CPU_REFERENCE_CLOCK);
-        return 4.0
-          * (s.baseClockGhz / C.CPU_REFERENCE_CLOCK)
-          * (s.hyperthreading ? C.HT_BONUS_FACTOR : 1.0)
-          * (C.HYPERVISOR_FACTORS[s.hypervisor] ?? 1.0);
+        if (!s) return null;
+        const tNodes = s.nodes.filter(n => n.role === 'transcoding');
+        const repVCPU = tNodes.length > 0
+          ? Math.round(tNodes.reduce((a, n) => a + n.vCPU, 0) / tNodes.length)
+          : vCPUPerNode.value;
+        const repRAM = tNodes.length > 0
+          ? Math.round(tNodes.reduce((a, n) => a + n.ram, 0) / tNodes.length)
+          : repVCPU;
+        const kResult = computeK(s, { vCPU: repVCPU, ram: repRAM });
+        const nodeRawHD = Math.floor(repVCPU * s.baseClockGhz * kResult.K);
+        const totalTNodes = allNodes.value.filter(n => n.role === 'transcoding').length;
+        return {
+          ...kResult,
+          assignedVCPU: repVCPU,
+          numberOfNodes: totalTNodes,
+          nodeRawHD,
+          totalRawHD: totalRawHDCapacity.value,
+        };
       });
 
       // ── step 7: vCPU + node count ─────────────────────────────────────────
@@ -900,10 +999,6 @@
           });
           if (s.hyperthreading) {
             w.push({ type: 'ht', text: `${label}: Hyperthreading bonus applied. Requires NUMA-pinned VM affinity. Disable vMotion / Live Migration when using CPU pinning.` });
-          }
-          if (s.hypervisor !== 'cloud') {
-            const hvName = { vmware: 'VMware', hyperv: 'Hyper-V', kvm: 'KVM' }[s.hypervisor] ?? s.hypervisor;
-            w.push({ type: 'overcommit', text: `${label}: Avoid CPU overcommit on ${hvName}. Pexip is CPU-intensive; maintain a 1:1 vCPU-to-pCPU ratio.` });
           }
         });
 
@@ -995,8 +1090,7 @@
       });
 
       // ── lookup tables exposed to template ─────────────────────────────────
-      const HV_FACTORS = { vmware: 1.0, kvm: 0.95, hyperv: 0.90, cloud: 1.0 };
-      const CPU_MIN_CLOCK   = C.CPU_MIN_CLOCK_GHZ;
+      const CPU_MIN_CLOCK = C.CPU_MIN_CLOCK_GHZ;
 
       // ── return ─────────────────────────────────────────────────────────────
       return {
@@ -1058,7 +1152,7 @@
         totalHDWithHeadroom,
         backplaneHD,
         proxyHDDemand,
-        effectiveHDperVcpu,
+        hdEstimateResult,
         vCPURequired,
         transcodingNodeCount,
         proxyNodeCount,
@@ -1098,7 +1192,6 @@
         NODE_ROLES:               C.NODE_ROLES,
         NODE_ROLES_HW:            C.NODE_ROLES_HW,
         QUALITY_LABELS:           C.QUALITY_LABELS,
-        HV_FACTORS,
         CPU_MIN_CLOCK,
 
         // formatters

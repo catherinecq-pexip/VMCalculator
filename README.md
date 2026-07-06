@@ -11,7 +11,7 @@ Runs entirely in the browser with no build step. Hosted on GitHub Pages at [cath
 Architects and customers use this tool to answer:
 
 - How many transcoding nodes do I need for my endpoint mix?
-- What vCPU count is required given my CPU model and hypervisor?
+- What is the estimated raw HD compute capacity of my server hardware, given its CPU traits and memory configuration?
 - What is the minimum and maximum bandwidth requirement across all meetings, broken out by meeting access, inter-node backplane, and proxy forwarding?
 - Do I need proxy/edge nodes, and how many?
 - What is the per-meeting gateway overhead for Teams or Google Meet calls?
@@ -22,7 +22,7 @@ The workflow mirrors how Pexip resources are actually consumed:
 1. **Define endpoint types** (① Endpoint & Interop Model) — set total count, quality, and codec for each platform (SIP/H.323, Zoom, WebRTC, Teams, Google Meet, Skype for Business). Connection factors and gateway overhead are applied automatically.
 2. **Build the topology** (② Deployment Topology Builder) — create locations and assign how many endpoints of each type sit at each location. Nodes defined in ④ automatically appear here in a read-only view, grouped by location.
 3. **Configure meetings** (③ Meeting Builder) — meeting templates are **auto-generated** from the topology. Each template specifies: participant count and distribution by location (including external), meeting type (gateway target or standard VMR), layout, and presentation. The Endpoint Pool Allocation summary at the top of this section shows demand against assigned endpoints in real time. Resource calculations are topology-driven and independent of the hardware configuration section.
-4. **Build the hardware deployment** (④ Deployment Hardware Builder) — define one or more physical or cloud servers (sockets, cores, clock speed, hyperthreading, RAM, hypervisor). Each server is a resource container. Carve Pexip nodes out of servers in the Configure Nodes tab: assign each node a role (Transcoding Conferencing, Proxying Edge, Management), socket/NUMA affinity, vCPU, and RAM. Node counts drive the allocation summary strip and feed back into the topology view in ②. HD capacity and vCPU/RAM allocation are tracked per server and across the deployment.
+4. **Build the hardware deployment** (④ Deployment Hardware Builder) — define one or more physical or cloud servers (sockets, cores, clock speed, hyperthreading, CPU cache, instruction set support, RAM, memory channel configuration). Each server is a resource container. Carve Pexip nodes out of servers in the Configure Nodes tab: assign each node a role (Transcoding Conferencing, Proxying Edge, Management), socket/NUMA affinity, vCPU, and RAM. Node counts drive the allocation summary strip and feed back into the topology view in ②. A K coefficient is derived automatically from CPU and memory-channel traits to produce an estimated raw HD compute capacity per node — this is the HD compute bucket, not usable participant capacity.
 
 The output is a per-location node recommendation table, total vCPU count, per-template HD breakdown with full backplane and gateway decomposition in the interop summary, and a five-section network bandwidth model.
 
@@ -45,9 +45,9 @@ The calculation model is grounded in Pexip's published capacity planning methodo
 - **Layout-driven video participant limits** — Each layout has a maximum number of participants actively composited into the video mix. Participants beyond that limit are treated as audio-only for HD resource calculation (0.0625 HD × connFactor). Limits by category: Adaptive Composition (12); Speaker-Focused: 1+0 (1), 1+1 (2), 1+7 (8), 1+21 (22), 2+21 (23), 1+33 (34); Equal Grid: 2×2 (4), 3×3 (9), 4×4 (16), 5×5 (25).
 - **Demand-driven node recommendations** — The recommended transcoding node count is derived from meeting demand (vCPU required ÷ vCPU per node), not from the physical hardware count alone. Hardware configuration determines the node size and efficiency; demand determines how many nodes are needed.
 - **NUMA alignment** — Pexip performance is sensitive to NUMA topology. A node VM should not span NUMA nodes. The calculator warns when `nodesPerSocket > 2`.
-- **No CPU overcommit** — Pexip is CPU-intensive real-time media software. The calculator warns to maintain a 1:1 vCPU-to-physical-core ratio on non-cloud hypervisors.
+- **No CPU overcommit** — Pexip is CPU-intensive real-time media software. Maintain a 1:1 vCPU-to-physical-core ratio; the calculator warns when vCPU allocation exceeds available physical threads per server.
 - **25% headroom** — All resource totals are multiplied by 1.25 before converting to node counts. This provides capacity for bursts and rolling upgrades.
-- **CPU efficiency calibration** — The base HD/vCPU efficiency is fixed at **4.0 HD/vCPU** (AVX2 baseline, 2.8 GHz reference clock). Clock speed and hypervisor factors scale linearly from that reference. Hyperthreading adds a 1.4× bonus when VMs are NUMA-pinned to a single socket. This conservative fixed baseline avoids the variability introduced by per-server instruction set selection.
+- **K coefficient model for raw HD capacity** — The hardware builder estimates raw HD compute capacity using a coefficient K derived automatically from CPU and memory-channel traits. K is computed as `clamp(floor, ceiling, BASE_COEFF + scores)` where scores capture instruction set support (AVX-512, AVX2), base clock, CPU cache per assigned vCPU, memory-channel width and population, and node size. Two estimate modes are inferred automatically: **Conservative** (ceiling 0.78, default) and **Projected** (ceiling 0.83, +0.04 adjustment) — Projected mode unlocks only when AVX-512 is confirmed, all memory channels are populated, cache-per-vCPU ≥ 1.25 MB, base clock ≥ 2.6 GHz, node vCPU ≤ 56, and RAM ≥ vCPU. The result is an estimated raw HD compute bucket (`floor(vCPU × GHz × K)` per node), not usable participant capacity.
 
 ---
 
@@ -365,33 +365,81 @@ The 25% headroom provides capacity for concurrent-use bursts and rolling node up
 
 ---
 
-### Step 6 — CPU efficiency model
+### Step 6 — Raw HD capacity estimate (K coefficient model)
 
-Translates total HD demand into a vCPU count based on the primary server's characteristics. If no servers have been defined, a reference estimate is used (4.0 × 3.0/2.8 ≈ 4.29 HD/vCPU).
+Estimates raw HD compute capacity per transcoding node from server and node hardware traits. This is the HD compute bucket — not usable participant capacity. Implemented in `computeK(server, node)` in [js/app.js](js/app.js); constants in [js/config.js](js/config.js).
+
+**Score components:**
+
+| Score | Input | Values |
+|---|---|---|
+| InstructionSetScore | `server.instructionSet` | AVX-512 → +0.07 · AVX2 → +0.04 · AVX/Unknown → +0.00 |
+| BaseClockScore | `server.baseClockGhz` | < 2.3 → −0.04 · 2.3–2.6 → +0.00 · 2.6–2.9 → +0.03 · ≥ 2.9 → +0.05 |
+| CacheScore | `cpuCacheMB / node.vCPU` | < 0.50 → −0.02 · 0.50–0.75 → +0.00 · 0.75–1.25 → +0.02 · ≥ 1.25 → +0.04 |
+| MemoryChannelWidthScore | `maxMemoryChannelsPerSocket` | ≥ 8 → +0.03 · = 6 → −0.03 · ≤ 4 → −0.05 · missing → +0.00 |
+| MemoryChannelPopulationScore | `populatedChannels / maxChannels` | = 1.00 → +0.00 · ≥ 0.75 → −0.03 · < 0.75 → −0.08 · missing → +0.00 |
+| NodeSizeScore | `node.vCPU` | ≤ 48 → +0.00 · 49–56 → −0.02 · > 56 → −0.06 |
+
+**Constants:**
 
 ```
-effectiveHDperVcpu = 4.0   (fixed AVX2 baseline, 2.8 GHz reference)
-                     × (primaryServer.baseClockGhz / CPU_REFERENCE_CLOCK)
-                     × (HT_BONUS_FACTOR if primaryServer.hyperthreading else 1.0)
-                     × HYPERVISOR_FACTORS[primaryServer.hypervisor]
+COEFF_FLOOR                = 0.58
+BASE_COEFF                 = 0.62
+COEFF_CEILING_CONSERVATIVE = 0.78
+COEFF_CEILING_PROJECTED    = 0.83
+PROJECTED_MODE_ADJUSTMENT  = 0.04
 ```
 
-The base of **4.0 HD/vCPU** is a fixed conservative baseline (AVX2 at 2.8 GHz reference). Clock speed scales linearly from that reference point.
+**Mode inference (automatic):**
 
-`CPU_REFERENCE_CLOCK = 2.8 GHz`
+`ProjectedEligibility` is true only when **all** of the following hold:
+- `instructionSet === 'avx512'`
+- `maxMemoryChannelsPerSocket >= 8` and `populatedChannels === maxChannels`
+- `cachePerThread >= 1.25 MB` (where `cachePerThread = cpuCacheMB / node.vCPU`)
+- `baseClockGhz >= 2.6`
+- `4 <= node.vCPU <= 56`
+- `node.ram >= node.vCPU`
 
-| Hypervisor | Factor |
-|---|---|
-| VMware ESXi | 1.0 |
-| KVM | 0.95 |
-| Hyper-V | 0.90 |
-| Cloud / hosted | 1.0 |
-
-`HT_BONUS_FACTOR = 1.4` — only valid when VMs are NUMA-pinned to a single socket.
-
-**Example:** 3.2 GHz, Hyper-V, HT off:
 ```
-effectiveHDperVcpu = 4.0 × (3.2 / 2.8) × 1.0 × 0.90 ≈ 4.11 HD/vCPU
+if ProjectedEligible:
+  K = clamp(COEFF_FLOOR, COEFF_CEILING_PROJECTED, RawK + PROJECTED_MODE_ADJUSTMENT)
+
+else:
+  K = clamp(COEFF_FLOOR, COEFF_CEILING_CONSERVATIVE, RawK)
+
+RawK = BASE_COEFF + InstructionSetScore + BaseClockScore + CacheScore
+       + MemoryChannelWidthScore + MemoryChannelPopulationScore + NodeSizeScore
+```
+
+**Node HD capacity formula:**
+```
+NodeRawHD = floor(node.vCPU × server.baseClockGhz × K)
+TotalRawHD = sum(NodeRawHD × server.quantity  for all transcoding nodes across all servers)
+```
+
+`TotalRawHD` is wired through `serverAllocations → physicalCapacitySummary → totalRawHDCapacity` and displayed in the hardware allocation summary strip and Resource Summary result card.
+
+**Example — Conservative mode** (Unknown ISA, 36 MB cache, 3.0 GHz, 48-vCPU node, 8/8 channels):
+```
+CachePerThread       = 36 / 48 = 0.75 MB  → CacheScore = +0.02
+BaseClockScore       = +0.03  (2.6 ≤ 3.0 < 2.9)
+MemChannelWidthScore = +0.03  (maxCh = 8)
+InstructionSetScore  = +0.00  (unknown)
+RawK = 0.62 + 0.00 + 0.03 + 0.02 + 0.03 + 0.00 + 0.00 = 0.70
+Mode = Conservative (ISA unknown) → K = clamp(0.58, 0.78, 0.70) = 0.70
+NodeRawHD = floor(48 × 3.0 × 0.70) = 100 HD
+```
+
+**Example — Projected mode** (AVX-512, 60 MB cache, 3.0 GHz, 32-vCPU node, 8/8 channels, 64 GB RAM):
+```
+CachePerThread       = 60 / 32 = 1.875 MB → CacheScore = +0.04
+InstructionSetScore  = +0.07  (AVX-512)
+BaseClockScore       = +0.03
+MemChannelWidthScore = +0.03
+RawK = 0.62 + 0.07 + 0.03 + 0.04 + 0.03 + 0.00 + 0.00 = 0.79
+All ProjectedEligibility conditions met → mode = Projected
+K = clamp(0.58, 0.83, 0.79 + 0.04) = 0.83
+NodeRawHD = floor(32 × 3.0 × 0.83) = 79 HD
 ```
 
 ---
@@ -560,12 +608,16 @@ rowResults → meetingResults (per template × count)
   ├─ HD path:        totalHDBeforeBackplane
   │                  → backplaneHD (sum of hdBackplaneAll from meetingResults)
   │                  → totalHDRaw → totalHDWithHeadroom
-  │                  → effectiveHDperVcpu → vCPURequired → transcodingNodeCount
+  │                  → vCPURequired → transcodingNodeCount
   └─ Bandwidth path: meetingBandwidthMin/Max
                      backplaneBandwidthMin/Max   (cross-location meetings)
                      proxyBandwidthMin/Max        (external participants)
                      perLocationBandwidth
                      totalBandwidthMin/Max
+
+computeK(server, node) → nodeHDCapacity → serverAllocations
+  → physicalCapacitySummary → totalRawHDCapacity   (hardware HD compute bucket)
+  → hdEstimateResult                               (Estimated Raw HD Capacity card)
 ```
 
 ### What not to do
