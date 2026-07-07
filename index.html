@@ -432,7 +432,7 @@
                   </div>
                   <div class="interop-line interop-sub"
                        v-if="(meetingResults.find(r => r.id === tmpl.id)?.hdBackplane ?? 0) > 0">
-                    <span>· Backplane ({{ (meetingResults.find(r => r.id === tmpl.id)?.crossLocationCount ?? 0) + 1 + ((meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) > 0 ? 1 : 0) }} node{{ ((meetingResults.find(r => r.id === tmpl.id)?.crossLocationCount ?? 0) + ((meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) > 0 ? 1 : 0)) > 0 ? 's' : '' }})</span>
+                    <span>· Backplane ({{ (meetingResults.find(r => r.id === tmpl.id)?.totalNodes ?? 1) + ((meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) > 0 ? 1 : 0) }} node{{ ((meetingResults.find(r => r.id === tmpl.id)?.totalNodes ?? 1) + ((meetingResults.find(r => r.id === tmpl.id)?.extPts ?? 0) > 0 ? 1 : 0)) > 1 ? 's' : '' }})</span>
                     <span>{{ fmtHD(meetingResults.find(r => r.id === tmpl.id)?.hdBackplane ?? 0) }} HD</span>
                   </div>
                   <div class="interop-line" style="color:var(--pex-teal-dark);font-weight:600">

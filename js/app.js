@@ -567,6 +567,21 @@
         return Math.round(tNodes.reduce((a, n) => a + n.ram, 0) / tNodes.length);
       });
 
+      // HD capacity of one transcoding node — threshold for intra-location multi-node spill
+      const nodeCapacityHD = computed(() => {
+        const s = primaryServer.value;
+        if (!s) return vCPUPerNode.value; // fallback: 1 HD ≈ 1 vCPU
+        const tNodes = allNodeDefinitions.value.filter(n => n.role === 'transcoding');
+        const repVCPU = tNodes.length > 0
+          ? Math.round(tNodes.reduce((a, n) => a + n.vCPU, 0) / tNodes.length)
+          : vCPUPerNode.value;
+        const repRAM = tNodes.length > 0
+          ? Math.round(tNodes.reduce((a, n) => a + n.ram, 0) / tNodes.length)
+          : repVCPU;
+        const { K } = computeK(s, { vCPU: repVCPU, ram: repRAM });
+        return Math.max(1, Math.floor(repVCPU * s.baseClockGhz * K));
+      });
+
       // ── server allocation computeds ───────────────────────────────────────
 
       // Per-server breakdown of vCPU, RAM, HD, and per-socket thread usage
@@ -754,17 +769,6 @@
             bwPresentationMax = pBw.max;
           }
 
-          let bwBackplaneMin = 0, bwBackplaneMax = 0;
-          if (hasCrossLocation) {
-            const lp = C.LAYOUTS[tmpl.layout]?.backplane ?? { hd: 1, thumb: 0 };
-            bwBackplaneMin = lp.hd * C.BACKPLANE_HD_MIN_KBPS + lp.thumb * C.BACKPLANE_THUMB_MIN_KBPS;
-            bwBackplaneMax = lp.hd * C.BACKPLANE_HD_MAX_KBPS + lp.thumb * C.BACKPLANE_THUMB_MAX_KBPS;
-            if (tmpl.presentationActive) {
-              bwBackplaneMin += C.BACKPLANE_PRESENTATION_KBPS;
-              bwBackplaneMax += C.BACKPLANE_PRESENTATION_KBPS;
-            }
-          }
-
           const bwProxyMin = extPts > 0 ? Math.round(bwAccessMin * extProportion) : 0;
           const bwProxyMax = extPts > 0 ? Math.round(bwAccessMax * extProportion) : 0;
           const bwMeetingMin = bwAccessMin + bwAudioMin + bwPresentationMin;
@@ -783,24 +787,43 @@
                                  : 0;
           const hdGateway = pexipPts * gatewayHDPerCall;
 
+          // hdTotal must be computed before backplane so nodesForMeeting can be derived
+          const hdTotal = hdEndpoints + hdPresentation + hdComposition + hdGateway;
+
           // Participants at non-host locations (needed for per-participant gateway backplane)
           const crossLocationPts = (tmpl.participants || [])
             .filter(p => Number(p.count) > 0 && p.locationId && p.locationId !== hostId)
             .reduce((a, p) => a + Number(p.count), 0);
 
-          // Per-meeting backplane HD — per Pexip docs:
-          // Every conference on every node in a multi-node deployment reserves 1 HD.
-          // Each topology location = one node. All meeting types use the same rule;
+          // Intra-location node spill: if hdTotal exceeds one node's capacity, extra nodes are
+          // needed at the host location and each pair requires its own backplane connection.
+          const nodesForMeeting = Math.max(1, Math.ceil(hdTotal / nodeCapacityHD.value));
+          const totalNodes      = nodesForMeeting + (hasCrossLocation ? crossLocationCount : 0);
+
+          // Per-meeting backplane HD — every node involved reserves 1 HD per meeting.
+          // Triggers for cross-location, intra-location multi-node, or proxy boundaries.
           // Teams/Google Meet gateway costs are separate (hdGateway above).
-          const isMultiNodeDeployment = locations.length > 1;
+          const isMultiNodeMeeting = totalNodes > 1 || extPts > 0;
           let hdBackplane = 0;
-          if (isMultiNodeDeployment) {
-            const nodeCount = hasCrossLocation ? (crossLocationCount + 1) : 1;
-            hdBackplane = nodeCount * C.BACKPLANE_HD_PER_MEETING;
+          if (isMultiNodeMeeting) {
+            hdBackplane = totalNodes * C.BACKPLANE_HD_PER_MEETING;
             if (extPts > 0) hdBackplane += C.BACKPLANE_HD_PER_MEETING; // proxy = extra node boundary
           }
 
-          const hdTotal = hdEndpoints + hdPresentation + hdComposition + hdGateway;
+          // Backplane BW: one link set per node boundary.
+          // Links = (nodesForMeeting − 1) intra-location + crossLocationCount cross-location.
+          const totalBackplaneLinks = (nodesForMeeting - 1) + (hasCrossLocation ? crossLocationCount : 0);
+          let bwBackplaneMin = 0, bwBackplaneMax = 0;
+          if (totalBackplaneLinks > 0) {
+            const lp = C.LAYOUTS[tmpl.layout]?.backplane ?? { hd: 1, thumb: 0 };
+            bwBackplaneMin = totalBackplaneLinks * (lp.hd * C.BACKPLANE_HD_MIN_KBPS + lp.thumb * C.BACKPLANE_THUMB_MIN_KBPS);
+            bwBackplaneMax = totalBackplaneLinks * (lp.hd * C.BACKPLANE_HD_MAX_KBPS + lp.thumb * C.BACKPLANE_THUMB_MAX_KBPS);
+            if (tmpl.presentationActive) {
+              bwBackplaneMin += C.BACKPLANE_PRESENTATION_KBPS;
+              bwBackplaneMax += C.BACKPLANE_PRESENTATION_KBPS;
+            }
+          }
+
           const loc = locations.find(l => l.id === tmpl.hostLocationId);
 
           // Interop summary
@@ -844,6 +867,8 @@
             hdGateway,
             hdBackplane,
             hdTotal,
+            nodesForMeeting,
+            totalNodes,
             hdTotalAll:        hdTotal        * effectiveCount,
             hdEndpointsAll:    hdEndpoints    * effectiveCount,
             hdPresentationAll: hdPresentation * effectiveCount,
@@ -936,12 +961,15 @@
       });
 
       // ── step 7: vCPU + node count ─────────────────────────────────────────
-      const vCPURequired = computed(() => Math.ceil(totalHDWithHeadroom.value));
-      // Node count: use user-defined transcoding nodes when available; fall back to HD-derived estimate
+      // Node count: use user-defined transcoding nodes when available; fall back to
+      // totalHDWithHeadroom ÷ nodeCapacityHD (K-adjusted), matching the per-meeting
+      // nodesForMeeting denominator so both counts are on the same scale.
       const transcodingNodeCount = computed(() => {
         const defined = allNodes.value.filter(n => n.role === 'transcoding').length;
-        return defined || Math.max(1, Math.ceil(vCPURequired.value / vCPUPerNode.value));
+        return defined || Math.max(1, Math.ceil(totalHDWithHeadroom.value / nodeCapacityHD.value));
       });
+      // vCPU required = recommended node count × vCPU per node (actual fleet commitment).
+      const vCPURequired = computed(() => transcodingNodeCount.value * vCPUPerNode.value);
       const proxyNodeCount = computed(() =>
         totalDefinedProxyNodes.value + totalDefinedExternalNodes.value
       );
@@ -1163,6 +1191,7 @@
         // hardware builder computeds
         totalAvailableVCPU,
         vCPUPerNode,
+        nodeCapacityHD,
         ramPerNode,
         serverAllocations,
         physicalCapacitySummary,

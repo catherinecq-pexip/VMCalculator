@@ -35,7 +35,7 @@ The calculation model is grounded in Pexip's published capacity planning methodo
 - **HD equivalence** — Full HD (1080p) costs 2.0 HD; SD costs 0.5 HD; audio costs 0.0625 HD. This reduces heterogeneous endpoint mixes to a single scalar for node sizing.
 - **Per-platform connection factors** — SIP/H.323 = 1.0×, Zoom = 1.0×, WebRTC VP8 = 1.0×, WebRTC VP9 = 1.25× (via codec factor), Microsoft Teams = 1.5× (minimum 1.5 HD per connection at any quality), Google Meet = 1.0×, Skype for Business = 1.0×.
 - **Gateway call overhead** — When the meeting type is a cloud gateway (Teams or Google Meet), Pexip creates one gateway call leg per participant to the external platform. Each leg carries a fixed HD overhead on the hosting transcoding node, in addition to the participant's endpoint HD: Teams Connector = 1.5 HD/call, Google Meet connection = 1.0 HD/call. These are shown grouped under "Endpoint HD" in the interop summary. This cost is independent of endpoint quality and applies to all participants regardless of location.
-- **Backplane model (per Pexip docs)** — Every transcoding node in a multi-node deployment reserves a fixed **1 HD per conference** for backplane, even if the conference is not distributed. Each topology location is treated as a separate node. Single-location deployments (one location defined) have no backplane reservation. For distributed meetings, each additional participating location adds 1 HD: `(crossLocationCount + 1) × 1 HD`. External participants always imply a proxy node boundary (+1 HD). This model is identical for all meeting types — Teams and Google Meet gateway meetings use the same standard 1 HD backplane; their gateway leg costs (1.5 HD or 1.0 HD per call) are tracked separately in the gateway overhead component.
+- **Backplane model (per Pexip docs)** — Every transcoding node involved in a conference reserves a fixed **1 HD per conference** for backplane. Each topology location is treated as a separate node. If a single meeting's HD demand (`hdTotal`) exceeds one node's K-adjusted capacity, the meeting spans multiple nodes at the host location — each extra node also contributes a backplane reservation. For distributed meetings, each remote location adds one more node: total nodes = `nodesForMeeting + crossLocationCount`. External participants always imply a proxy node boundary (+1 HD). This model is identical for all meeting types — Teams and Google Meet gateway meetings use the same 1 HD/node backplane rule; their gateway leg costs (1.5 HD or 1.0 HD per call) are tracked separately.
 - **Proxy node load** — Proxy/Edge nodes forward external calls without transcoding. Each forwarded call consumes approximately 0.2 HD on the proxy node. This demand is tracked separately from transcoding node HD and shown in node recommendations.
 - **VP9 resource trade-off** — VP9 reduces bandwidth by ~33% compared to H.264 at the same resolution, but increases node CPU load by 25% (`VP9_RESOURCE_FACTOR = 1.25`).
 - **Presentation overhead** — When content is shared in a meeting, each Pexip-routed participant incurs a per-participant HD overhead on the transcoding node (`presentationHD × typeCount`, applied when `presentationActive` is enabled). Overhead by endpoint type: SIP/H.323 = 0.5 HD, Zoom = 0.5 HD, WebRTC = 1.0 HD, Microsoft Teams = 0.5 HD, Google Meet = 1.0 HD, Skype for Business = 1.0 HD.
@@ -43,7 +43,7 @@ The calculation model is grounded in Pexip's published capacity planning methodo
 - **Host-native participant exclusion** — For meetings hosted on external platforms (Teams, Google Meet, Zoom, Skype for Business), native participants of the host platform don't route through Pexip Infinity and consume no Pexip HD or bandwidth resources. Only interop participants whose media path traverses Pexip count toward endpoint HD, gateway overhead, composition overhead, audio bandwidth, and presentation bandwidth. Pexip-native meeting types (SIP/H.323, WebRTC) are unaffected — all participants count.
 - **Template-driven resources** — Resources are consumed only during active conferences. Each template's per-meeting HD/BW cost is computed once and multiplied by the template's meeting count to produce aggregate totals.
 - **Layout-driven video participant limits** — Each layout has a maximum number of participants actively composited into the video mix. Participants beyond that limit are treated as audio-only for HD resource calculation (0.0625 HD × connFactor). Limits by category: Adaptive Composition (12); Speaker-Focused: 1+0 (1), 1+1 (2), 1+7 (8), 1+21 (22), 2+21 (23), 1+33 (34); Equal Grid: 2×2 (4), 3×3 (9), 4×4 (16), 5×5 (25).
-- **Demand-driven node recommendations** — The recommended transcoding node count is derived from meeting demand (vCPU required ÷ vCPU per node), not from the physical hardware count alone. Hardware configuration determines the node size and efficiency; demand determines how many nodes are needed.
+- **Demand-driven node recommendations** — The recommended transcoding node count is derived from meeting demand (`totalHDWithHeadroom ÷ nodeCapacityHD`), not from the physical hardware count alone. `nodeCapacityHD` is the K-adjusted HD capacity of one transcoding node (`floor(vCPU × GHz × K)`), so recommendations and per-meeting backplane node counts use the same metric. Hardware configuration determines efficiency; meeting demand determines count.
 - **NUMA alignment** — Pexip performance is sensitive to NUMA topology. A node VM should not span NUMA nodes. The calculator warns when `nodesPerSocket > 2`.
 - **No CPU overcommit** — Pexip is CPU-intensive real-time media software. Maintain a 1:1 vCPU-to-physical-core ratio; the calculator warns when vCPU allocation exceeds available physical threads per server.
 - **25% headroom** — All resource totals are multiplied by 1.25 before converting to node counts. This provides capacity for bursts and rolling upgrades.
@@ -185,30 +185,49 @@ This cost is fixed per call regardless of endpoint quality, and is separate from
 
 **2g — Per-meeting backplane HD:**
 
-Backplane cost is topology-driven. Each topology location is treated as a separate node. The same rule applies to all meeting types — gateway overhead (Teams/Google Meet) is a separate component.
+Backplane cost is topology-driven and accounts for both cross-location distribution and intra-location multi-node spill. The same rule applies to all meeting types — gateway overhead (Teams/Google Meet) is a separate component.
 
 ```
-isMultiNodeDeployment = locations.length > 1
+nodeCapacityHD  = floor(repVCPU × baseClockGhz × K)   (K-adjusted per-node HD capacity)
+                  fallback: vCPUPerNode   if no server is configured
 
-if isMultiNodeDeployment:
-  nodeCount   = (crossLocationCount + 1)   if hasCrossLocation   else 1
-  hdBackplane = nodeCount × BACKPLANE_HD_PER_MEETING   (1.0 HD per node, fixed)
+nodesForMeeting = max(1, ceil(hdTotal / nodeCapacityHD))
+                  ← how many nodes the host location needs for this one meeting instance
+
+totalNodes      = nodesForMeeting + (hasCrossLocation ? crossLocationCount : 0)
+
+isMultiNodeMeeting = totalNodes > 1 || extPts > 0
+
+if isMultiNodeMeeting:
+  hdBackplane  = totalNodes × BACKPLANE_HD_PER_MEETING   (1.0 HD per node, fixed)
   hdBackplane += BACKPLANE_HD_PER_MEETING   if extPts > 0   (proxy = extra node boundary)
 
-else:   (single location = single-node deployment)
+else:
   hdBackplane = 0
+```
+
+`nodesForMeeting > 1` when `hdTotal` exceeds the K-adjusted capacity of one node — the meeting is split across multiple nodes at the same location, each pair requiring its own backplane link.
+
+Backplane bandwidth uses the same link-count logic:
+```
+totalBackplaneLinks = (nodesForMeeting − 1) + (hasCrossLocation ? crossLocationCount : 0)
+
+if totalBackplaneLinks > 0:
+  bwBackplaneMin = totalBackplaneLinks × (lp.hd × BACKPLANE_HD_MIN_KBPS + lp.thumb × BACKPLANE_THUMB_MIN_KBPS)
+  bwBackplaneMax = totalBackplaneLinks × (lp.hd × BACKPLANE_HD_MAX_KBPS + lp.thumb × BACKPLANE_THUMB_MAX_KBPS)
 ```
 
 **Backplane model by scenario (all meeting types, per meeting):**
 
-| Scenario | Topology | hdBackplane |
+| Scenario | hdBackplane | Backplane links |
 |---|---|---|
-| Single location defined | 1 location | 0 HD (single-node, no backplane) |
-| Single-location meeting, multi-location topology | ≥2 locations | 1.0 HD (base reservation, non-distributed) |
-| Host + 1 remote location | ≥2 locations | 2.0 HD |
-| Host + 2 remote locations | ≥2 locations | 3.0 HD |
-| External participants only (no cross-location) | ≥2 locations | 2.0 HD (host node + proxy boundary) |
-| Cross-location + external participants | ≥2 locations | (N+1) × 1.0 + 1.0 HD |
+| Single location, meeting fits on 1 node | 0 HD | 0 |
+| Single location, meeting exceeds 1 node (N nodes needed) | N × 1.0 HD | N − 1 |
+| Host + 1 remote location, fits on 1 node each | 2.0 HD | 1 |
+| Host + 2 remote locations | 3.0 HD | 2 |
+| Host needs 2 nodes + 1 remote location | 3.0 HD | 2 |
+| External participants only (no cross-location) | 2.0 HD | 0 (proxy boundary) |
+| Cross-location + external participants | (totalNodes + 1) × 1.0 HD | crossLocationCount + (nodesForMeeting − 1) |
 
 Teams and Google Meet gateway meetings use the same backplane values. Their gateway leg costs (1.5 HD or 1.0 HD per call) are accounted for separately in `hdGateway`.
 
@@ -253,9 +272,10 @@ hdBackplaneAll= 2.0 × 10  = 20 HD
 
 Access bandwidth (using `pexipParticipantEndpoints` — host-native excluded):
 ```
-bwKey     = quality + '-' + codec
-bwMin     = BANDWIDTH_TABLE[bwKey]
-bwMax     = min(PARTICIPANT_MAX_KBPS, BANDWIDTH_TABLE_MAX[bwKey])
+bwKey        = quality + '-' + codec
+bwMin        = BANDWIDTH_TABLE[bwKey]
+qualityCap   = QUALITY_MAX_KBPS[quality]   { 'sd': 512, '720p': 1500, '1080p': 2500 }
+bwMax        = min(qualityCap, BANDWIDTH_TABLE_MAX[bwKey])
 
 bwAccessMin += typeCount × bwMin   (summed across Pexip-routed endpoint types)
 bwAccessMax += typeCount × bwMax
@@ -446,22 +466,29 @@ NodeRawHD = floor(32 × 3.0 × 0.79) = 75 HD
 
 ### Step 7 — vCPU and node count
 
-```
-vCPURequired = ceil(totalHDWithHeadroom)   (1 HD = 1 vCPU planning rule)
-```
-
-**Transcoding node count** — if transcoding nodes have been defined in the Hardware Builder, the count is taken directly from the user's deployment definition (× server quantity). If no nodes have been defined yet, the count falls back to a demand-derived estimate:
+**Transcoding node count** — if transcoding nodes have been defined in the Hardware Builder, the count is taken directly from the user's deployment definition (× server quantity). If no nodes have been defined yet, the count falls back to a demand-derived estimate using the same K-adjusted per-node capacity as `nodesForMeeting` in Step 2g:
 
 ```
+nodeCapacityHD   = floor(repVCPU × baseClockGhz × K)   (from Step 6 K model)
+                   fallback: vCPUPerNode   if no server is configured
+
 vCPUPerNode      = average vCPU across defined transcoding nodes
                    OR: ceil(socketsPerServer × coresPerSocket / CORES_PER_NODE_TARGET) × HT_factor
                        if no nodes defined
 
 transcodingNodes = defined transcoding nodes × server quantity   (when nodes are defined)
-                 = max(1, ceil(vCPURequired / vCPUPerNode))      (fallback estimate)
+                 = max(1, ceil(totalHDWithHeadroom / nodeCapacityHD))   (fallback estimate)
 
 CORES_PER_NODE_TARGET = 22   (physical cores per node target)
 ```
+
+Using `nodeCapacityHD` (rather than raw `vCPUPerNode`) ensures the deployment-level node count is on the same scale as the per-meeting `nodesForMeeting` — both answer "how many nodes at X HD capacity each are needed?"
+
+```
+vCPURequired = transcodingNodeCount × vCPUPerNode   (actual fleet vCPU commitment)
+```
+
+`vCPURequired` is derived from the node count rather than directly from HD demand, so it reflects the actual vCPU that the recommended fleet will consume. It is used for the summary bar comparison against `totalAvailableVCPU`.
 
 **Proxy node count** comes from the Hardware Builder: total Proxying Edge nodes defined across all servers × server quantity. Default sizing: 4 vCPU / 4 GB RAM.
 
@@ -605,17 +632,18 @@ The pipeline runs inside `setup()` in [js/app.js](js/app.js) as a chain of Vue `
 
 ```
 rowResults → meetingResults (per template × count)
+  │  ├─ nodeCapacityHD (K-adjusted) → nodesForMeeting → totalNodes
   ├─ HD path:        totalHDBeforeBackplane
   │                  → backplaneHD (sum of hdBackplaneAll from meetingResults)
   │                  → totalHDRaw → totalHDWithHeadroom
-  │                  → vCPURequired → transcodingNodeCount
+  │                  → transcodingNodeCount (÷ nodeCapacityHD) → vCPURequired (× vCPUPerNode)
   └─ Bandwidth path: meetingBandwidthMin/Max
-                     backplaneBandwidthMin/Max   (cross-location meetings)
+                     backplaneBandwidthMin/Max   (intra-location + cross-location links)
                      proxyBandwidthMin/Max        (external participants)
                      perLocationBandwidth
                      totalBandwidthMin/Max
 
-computeK(server, node) → nodeHDCapacity → serverAllocations
+computeK(server, node) → nodeCapacityHD → nodeHDCapacity → serverAllocations
   → physicalCapacitySummary → totalRawHDCapacity   (hardware HD compute bucket)
   → hdEstimateResult                               (Estimated Raw HD Capacity card)
 ```
