@@ -43,6 +43,13 @@ window.PEXIP = {
   // Absolute per-participant bandwidth ceiling regardless of quality
   PARTICIPANT_MAX_KBPS: 6000,
 
+  // Pexip-recommended max kbps per call by quality tier (docs.pexip.com — Restricting Bandwidth)
+  QUALITY_MAX_KBPS: {
+    'sd':    512,
+    '720p':  1500,
+    '1080p': 2500,
+  },
+
   // Audio overhead per participant (kbps) — added on top of video
   AUDIO_MIN_KBPS: 8,
   AUDIO_MAX_KBPS: 64,

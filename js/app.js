@@ -34,12 +34,12 @@
       // ── endpoint & interop model ──────────────────────────────────────────
       // count = total defined endpoints of this type (internal to the deployment)
       const endpointRows = reactive([
-        { type: 'sip_h323',           count: 0, quality: '1080p', codec: 'h264', maxKbps: 0 },
-        { type: 'zoom',               count: 0, quality: '1080p', codec: 'h264', maxKbps: 0 },
-        { type: 'webrtc',             count: 0, quality: '1080p', codec: 'vp8',  maxKbps: 0 },
-        { type: 'teams',              count: 0, quality: '1080p', codec: 'h264', maxKbps: 0 },
-        { type: 'google_meet',        count: 0, quality: '720p',  codec: 'vp8',  maxKbps: 0 },
-        { type: 'skype_for_business', count: 0, quality: '1080p', codec: 'h264', maxKbps: 0 },
+        { type: 'sip_h323',           count: 0, quality: '1080p', codec: 'h264' },
+        { type: 'zoom',               count: 0, quality: '1080p', codec: 'h264' },
+        { type: 'webrtc',             count: 0, quality: '1080p', codec: 'vp8'  },
+        { type: 'teams',              count: 0, quality: '1080p', codec: 'h264' },
+        { type: 'google_meet',        count: 0, quality: '720p',  codec: 'vp8'  },
+        { type: 'skype_for_business', count: 0, quality: '1080p', codec: 'h264' },
       ]);
 
       // ── topology — deployment topology builder ────────────────────────────
@@ -737,8 +737,8 @@
             const bwKey      = row.quality + '-' + row.codec;
             const bwFallback = row.quality + '-h264';
             const bwMin      = C.BANDWIDTH_TABLE[bwKey]     ?? C.BANDWIDTH_TABLE[bwFallback]     ?? 0;
-            const rowCap     = row.maxKbps > 0 ? row.maxKbps : C.PARTICIPANT_MAX_KBPS;
-            const bwMax      = Math.min(rowCap,
+            const qualityCap = C.QUALITY_MAX_KBPS[row.quality] ?? C.PARTICIPANT_MAX_KBPS;
+            const bwMax      = Math.min(qualityCap,
               C.BANDWIDTH_TABLE_MAX[bwKey] ?? C.BANDWIDTH_TABLE_MAX[bwFallback] ?? bwMin);
             bwAccessMin += typeCount * bwMin;
             bwAccessMax += typeCount * bwMax;
@@ -873,6 +873,15 @@
             bwProxyMaxAll:        bwProxyMax        * effectiveCount,
             backplaneHdStreams:    hasCrossLocation ? (C.LAYOUTS[tmpl.layout]?.backplane?.hd    ?? 1) : 0,
             backplaneThumbStreams: hasCrossLocation ? (C.LAYOUTS[tmpl.layout]?.backplane?.thumb ?? 0) : 0,
+            bwPerPtMin: pexipPts > 0 ? Math.round(bwMeetingMin / pexipPts) : 0,
+            bwPerPtMax: pexipPts > 0 ? Math.round(bwMeetingMax / pexipPts) : 0,
+            crossLocationNames: (tmpl.participants || [])
+              .filter(p => Number(p.count) > 0 && p.locationId && p.locationId !== hostId)
+              .reduce((acc, p) => {
+                const ln = locations.find(l => l.id === p.locationId)?.name || 'Unknown';
+                if (!acc.includes(ln)) acc.push(ln);
+                return acc;
+              }, []),
             nativeCount,
             interopByType,
             interopCount,
@@ -970,6 +979,8 @@
               proxyMin:      ms.reduce((a, r) => a + r.bwProxyMinAll,     0),
               proxyMax:      ms.reduce((a, r) => a + r.bwProxyMaxAll,     0),
               crossMeetings: ms.filter(r => r.hasCrossLocation).length,
+              totalMin:      ms.reduce((a, r) => a + r.bwMeetingMinAll + r.bwBackplaneMinAll + r.bwProxyMinAll, 0),
+              totalMax:      ms.reduce((a, r) => a + r.bwMeetingMaxAll + r.bwBackplaneMaxAll + r.bwProxyMaxAll, 0),
             };
           })
           .filter(l => l.localMin > 0 || l.wanMin > 0)
@@ -981,13 +992,17 @@
         meetingBandwidthMax.value + backplaneBandwidthMax.value + proxyBandwidthMax.value
       );
 
-      // ── QoS traffic-class aggregates ──────────────────────────────────────
-      const bwClassAudioMin = computed(() => meetingResults.value.reduce((a, r) => a + r.bwAudioMinAll,        0));
-      const bwClassAudioMax = computed(() => meetingResults.value.reduce((a, r) => a + r.bwAudioMaxAll,        0));
-      const bwClassVideoMin = computed(() => meetingResults.value.reduce((a, r) => a + r.bwVideoMinAll,        0));
-      const bwClassVideoMax = computed(() => meetingResults.value.reduce((a, r) => a + r.bwVideoMaxAll,        0));
-      const bwClassPresMin  = computed(() => meetingResults.value.reduce((a, r) => a + r.bwPresentationMinAll, 0));
-      const bwClassPresMax  = computed(() => meetingResults.value.reduce((a, r) => a + r.bwPresentationMaxAll, 0));
+      // ── proxy endpoint type aggregation ──────────────────────────────────
+      const proxyEndpointTypes = computed(() => {
+        const types = new Set();
+        meetingTemplates.forEach(tmpl => {
+          (tmpl.externalParticipants || []).forEach(p => {
+            if (Number(p.count) > 0 && p.endpointType)
+              types.add(C.ENDPOINT_TYPES[p.endpointType]?.label ?? p.endpointType);
+          });
+        });
+        return [...types];
+      });
 
       // ── warnings ──────────────────────────────────────────────────────────
       const warnings = computed(() => {
@@ -1180,12 +1195,7 @@
         perLocationBandwidth,
         totalBandwidthMin,
         totalBandwidthMax,
-        bwClassAudioMin,
-        bwClassAudioMax,
-        bwClassVideoMin,
-        bwClassVideoMax,
-        bwClassPresMin,
-        bwClassPresMax,
+        proxyEndpointTypes,
         warnings,
         nodeRecommendations,
 
