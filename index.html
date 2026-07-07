@@ -75,6 +75,7 @@
                 <th class="num">Count</th>
                 <th>Quality</th>
                 <th>Codec</th>
+                <th class="num" title="QoS rate cap per call (0 = unlimited)">Max kbps/call</th>
                 <th class="num">HD / participant</th>
               </tr>
             </thead>
@@ -97,6 +98,10 @@
                     <option value="vp9">VP9 (+25% CPU)</option>
                   </select>
                   <span v-else class="codec-label">{{ ENDPOINT_CODEC[row.type] }}</span>
+                </td>
+                <td>
+                  <input type="number" v-model.number="row.maxKbps" min="0" step="100"
+                         placeholder="unlimited" style="width:90px" />
                 </td>
                 <td class="num">
                   <span class="hd-badge">{{ fmtHD(rowResults[idx].hdPerPt) }} HD</span>
@@ -833,65 +838,6 @@
         </div>
       </div>
 
-      <!-- ── Meeting Results ─────────────────────────────────────────────── -->
-      <div class="result-card" v-if="meetingResults.length > 0">
-        <div class="result-card-header">Meeting Results</div>
-        <div class="result-card-body" style="padding:0">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Template</th>
-                <th class="num">Count</th>
-                <th class="num">Pts/mtg</th>
-                <th class="num">HD/mtg</th>
-                <th class="num">HD total</th>
-                <th>Flags</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="res in meetingResults" :key="res.id">
-                <td style="font-weight:600;font-size:12px">{{ res.name }}</td>
-                <td class="num">{{ res.count }}</td>
-                <td class="num">{{ res.totalPts }}</td>
-                <td class="num" style="color:var(--pex-teal-dark)">
-                  {{ fmtHD(res.hdTotal) }}
-                </td>
-                <td class="num" style="font-weight:700;color:var(--pex-teal-dark)">
-                  {{ fmtHD(res.hdTotalAll) }}
-                </td>
-                <td style="font-size:10px">
-                  <span v-if="res.hasCrossLocation" class="interop-pill"
-                        style="background:var(--warn-amber-bg);color:var(--warn-amber);margin-right:3px">
-                    ×-loc
-                  </span>
-                  <span v-if="res.hdComposition > 0" class="interop-pill" style="margin-right:3px">
-                    adapt
-                  </span>
-                  <span v-if="res.extPts > 0 && viaProxy" class="interop-pill"
-                        style="background:var(--pex-purple-light);color:var(--pex-purple);margin-right:3px">
-                    proxy
-                  </span>
-                  <span v-if="res.audioOverflowPts > 0" class="interop-pill"
-                        style="background:var(--warn-amber-bg);color:var(--warn-amber)">
-                    +{{ res.audioOverflowPts }} audio
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="result-card-body" style="padding:8px 16px">
-          <div class="breakdown-row">
-            <span class="bd-label">Total participants (all meetings)</span>
-            <span class="bd-val">
-              <span class="int-badge">{{ totalInternalPts }} internal</span>
-              &nbsp;
-              <span class="ext-badge" v-if="totalExternalPts > 0">{{ totalExternalPts }} external</span>
-            </span>
-          </div>
-        </div>
-      </div>
-
       <!-- ── Network Bandwidth ────────────────────────────────────────────── -->
       <div class="result-card">
         <div class="result-card-header">Network Bandwidth</div>
@@ -909,15 +855,24 @@
               <thead>
                 <tr>
                   <th>Meeting</th>
-                  <th class="num">Pts</th>
-                  <th class="num">Min</th>
-                  <th class="num">Max</th>
+                  <th class="num">Clients</th>
+                  <th class="num">Video</th>
+                  <th class="num">Audio</th>
+                  <th class="num" v-if="meetingResults.some(r => r.bwPresentationMinAll > 0)">Presentation</th>
+                  <th class="num">Total Min</th>
+                  <th class="num">Total Max</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="res in meetingResults.filter(r => r.bwMeetingMinAll > 0)" :key="res.id">
                   <td style="font-size:12px;font-weight:600">{{ res.name }} (×{{ res.count }})</td>
-                  <td class="num" style="font-size:11px">{{ res.totalPts }}</td>
+                  <td class="num" style="font-size:11px">{{ res.pexipPts }}</td>
+                  <td class="num" style="font-size:11px">{{ fmtRange(res.bwVideoMinAll, res.bwVideoMaxAll) }}</td>
+                  <td class="num" style="font-size:11px">{{ fmtRange(res.bwAudioMinAll, res.bwAudioMaxAll) }}</td>
+                  <td class="num" style="font-size:11px"
+                      v-if="meetingResults.some(r => r.bwPresentationMinAll > 0)">
+                    {{ res.bwPresentationMinAll > 0 ? fmtRange(res.bwPresentationMinAll, res.bwPresentationMaxAll) : '—' }}
+                  </td>
                   <td class="num" style="font-size:11px">{{ fmtKbps(res.bwMeetingMinAll) }}</td>
                   <td class="num" style="font-size:11px">{{ fmtKbps(res.bwMeetingMaxAll) }}</td>
                 </tr>
@@ -939,7 +894,9 @@
                 <thead>
                   <tr>
                     <th>Meeting</th>
-                    <th class="num">Layout</th>
+                    <th class="num">HD streams</th>
+                    <th class="num">Thumb streams</th>
+                    <th class="num" v-if="meetingResults.some(r => r.bwPresentationMinAll > 0)">+Pres</th>
                     <th class="num">Min</th>
                     <th class="num">Max</th>
                   </tr>
@@ -947,7 +904,12 @@
                 <tbody>
                   <tr v-for="res in meetingResults.filter(r => r.bwBackplaneMinAll > 0)" :key="res.id">
                     <td style="font-size:12px;font-weight:600">{{ res.name }} (×{{ res.count }})</td>
-                    <td class="num" style="font-size:11px">{{ res.layout }}</td>
+                    <td class="num" style="font-size:11px">{{ res.backplaneHdStreams }}</td>
+                    <td class="num" style="font-size:11px">{{ res.backplaneThumbStreams || '—' }}</td>
+                    <td class="num" style="font-size:11px"
+                        v-if="meetingResults.some(r => r.bwPresentationMinAll > 0)">
+                      {{ res.bwPresentationMinAll > 0 ? '✓' : '—' }}
+                    </td>
                     <td class="num" style="font-size:11px">{{ fmtKbps(res.bwBackplaneMinAll) }}</td>
                     <td class="num" style="font-size:11px">{{ fmtKbps(res.bwBackplaneMaxAll) }}</td>
                   </tr>
@@ -971,32 +933,79 @@
             </div>
           </div>
 
-          <!-- 4. Per-Location Totals -->
-          <div v-if="perLocationBandwidth.length > 1" class="result-card-body" style="border-top:1px solid var(--pex-border)">
-            <div class="bw-section-label">Per-Location Totals</div>
+          <!-- 4. Per-Node Network Budget -->
+          <div v-if="perLocationBandwidth.length > 0" class="result-card-body" style="border-top:1px solid var(--pex-border)">
+            <div class="bw-section-label">Per-Node Network Budget</div>
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>Location</th>
-                  <th class="num">Local min</th>
-                  <th class="num">Local max</th>
-                  <th class="num">WAN min</th>
-                  <th class="num">WAN max</th>
+                  <th>Node (Location)</th>
+                  <th class="num">×-loc mtgs</th>
+                  <th class="num">Client-facing min</th>
+                  <th class="num">Client-facing max</th>
+                  <th class="num">Backplane (↔) min</th>
+                  <th class="num">Backplane (↔) max</th>
+                  <th class="num" v-if="proxyBandwidthMax > 0">Proxy fwd min</th>
+                  <th class="num" v-if="proxyBandwidthMax > 0">Proxy fwd max</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="loc in perLocationBandwidth" :key="loc.id">
                   <td style="font-weight:600">{{ loc.name }}</td>
+                  <td class="num" style="font-size:11px">{{ loc.crossMeetings || '—' }}</td>
                   <td class="num" style="font-size:11px">{{ fmtKbps(loc.localMin) }}</td>
                   <td class="num" style="font-size:11px">{{ fmtKbps(loc.localMax) }}</td>
                   <td class="num" style="font-size:11px">{{ loc.wanMin > 0 ? fmtKbps(loc.wanMin) : '—' }}</td>
                   <td class="num" style="font-size:11px">{{ loc.wanMax > 0 ? fmtKbps(loc.wanMax) : '—' }}</td>
+                  <td class="num" style="font-size:11px" v-if="proxyBandwidthMax > 0">{{ loc.proxyMin > 0 ? fmtKbps(loc.proxyMin) : '—' }}</td>
+                  <td class="num" style="font-size:11px" v-if="proxyBandwidthMax > 0">{{ loc.proxyMax > 0 ? fmtKbps(loc.proxyMax) : '—' }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <!-- 5. Deployment-Wide Totals -->
+          <!-- 5. QoS / Traffic Classification -->
+          <div class="result-card-body" style="border-top:1px solid var(--pex-border)">
+            <div class="bw-section-label">QoS / Traffic Classification</div>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Traffic Class</th>
+                  <th class="num">DSCP (recommended)</th>
+                  <th class="num">Min</th>
+                  <th class="num">Max</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style="font-weight:600">Audio</td>
+                  <td class="num" style="font-size:11px">EF (46)</td>
+                  <td class="num" style="font-size:11px">{{ fmtKbps(bwClassAudioMin) }}</td>
+                  <td class="num" style="font-size:11px">{{ fmtKbps(bwClassAudioMax) }}</td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600">Video</td>
+                  <td class="num" style="font-size:11px">AF41 (34)</td>
+                  <td class="num" style="font-size:11px">{{ fmtKbps(bwClassVideoMin) }}</td>
+                  <td class="num" style="font-size:11px">{{ fmtKbps(bwClassVideoMax) }}</td>
+                </tr>
+                <tr v-if="bwClassPresMax > 0">
+                  <td style="font-weight:600">Presentation / Content</td>
+                  <td class="num" style="font-size:11px">AF31 (26)</td>
+                  <td class="num" style="font-size:11px">{{ fmtKbps(bwClassPresMin) }}</td>
+                  <td class="num" style="font-size:11px">{{ fmtKbps(bwClassPresMax) }}</td>
+                </tr>
+                <tr v-if="backplaneBandwidthMax > 0">
+                  <td style="font-weight:600">Backplane (node↔node)</td>
+                  <td class="num" style="font-size:11px">AF41 (34)</td>
+                  <td class="num" style="font-size:11px">{{ fmtKbps(backplaneBandwidthMin) }}</td>
+                  <td class="num" style="font-size:11px">{{ fmtKbps(backplaneBandwidthMax) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 6. Deployment-Wide Totals -->
           <div class="result-card-body" style="border-top:1px solid var(--pex-border)">
             <div class="bw-section-label">Deployment-Wide Totals</div>
             <div class="bw-total-row">

@@ -34,12 +34,12 @@
       // ── endpoint & interop model ──────────────────────────────────────────
       // count = total defined endpoints of this type (internal to the deployment)
       const endpointRows = reactive([
-        { type: 'sip_h323',           count: 0, quality: '1080p', codec: 'h264' },
-        { type: 'zoom',               count: 0, quality: '1080p', codec: 'h264' },
-        { type: 'webrtc',             count: 0, quality: '1080p', codec: 'vp8'  },
-        { type: 'teams',              count: 0, quality: '1080p', codec: 'h264' },
-        { type: 'google_meet',        count: 0, quality: '1080p', codec: 'vp8'  },
-        { type: 'skype_for_business', count: 0, quality: '1080p', codec: 'h264' },
+        { type: 'sip_h323',           count: 0, quality: '1080p', codec: 'h264', maxKbps: 0 },
+        { type: 'zoom',               count: 0, quality: '1080p', codec: 'h264', maxKbps: 0 },
+        { type: 'webrtc',             count: 0, quality: '1080p', codec: 'vp8',  maxKbps: 0 },
+        { type: 'teams',              count: 0, quality: '1080p', codec: 'h264', maxKbps: 0 },
+        { type: 'google_meet',        count: 0, quality: '720p',  codec: 'vp8',  maxKbps: 0 },
+        { type: 'skype_for_business', count: 0, quality: '1080p', codec: 'h264', maxKbps: 0 },
       ]);
 
       // ── topology — deployment topology builder ────────────────────────────
@@ -737,7 +737,8 @@
             const bwKey      = row.quality + '-' + row.codec;
             const bwFallback = row.quality + '-h264';
             const bwMin      = C.BANDWIDTH_TABLE[bwKey]     ?? C.BANDWIDTH_TABLE[bwFallback]     ?? 0;
-            const bwMax      = Math.min(C.PARTICIPANT_MAX_KBPS,
+            const rowCap     = row.maxKbps > 0 ? row.maxKbps : C.PARTICIPANT_MAX_KBPS;
+            const bwMax      = Math.min(rowCap,
               C.BANDWIDTH_TABLE_MAX[bwKey] ?? C.BANDWIDTH_TABLE_MAX[bwFallback] ?? bwMin);
             bwAccessMin += typeCount * bwMin;
             bwAccessMax += typeCount * bwMax;
@@ -833,6 +834,7 @@
             endpointLabel: C.ENDPOINT_TYPES[tmpl.meetingType]?.label ?? tmpl.meetingType,
             count: effectiveCount,
             totalPts,
+            pexipPts,
             extPts,
             maxVideoPts,
             audioOverflowPts: audioOverflow,
@@ -857,12 +859,20 @@
             bwBackplaneMin, bwBackplaneMax,
             bwProxyMin, bwProxyMax,
             bwMeetingMin, bwMeetingMax,
-            bwMeetingMinAll:   bwMeetingMin   * effectiveCount,
-            bwMeetingMaxAll:   bwMeetingMax   * effectiveCount,
-            bwBackplaneMinAll: bwBackplaneMin * effectiveCount,
-            bwBackplaneMaxAll: bwBackplaneMax * effectiveCount,
-            bwProxyMinAll:     bwProxyMin     * effectiveCount,
-            bwProxyMaxAll:     bwProxyMax     * effectiveCount,
+            bwVideoMinAll:        bwAccessMin       * effectiveCount,
+            bwVideoMaxAll:        bwAccessMax       * effectiveCount,
+            bwAudioMinAll:        bwAudioMin        * effectiveCount,
+            bwAudioMaxAll:        bwAudioMax        * effectiveCount,
+            bwPresentationMinAll: bwPresentationMin * effectiveCount,
+            bwPresentationMaxAll: bwPresentationMax * effectiveCount,
+            bwMeetingMinAll:      bwMeetingMin      * effectiveCount,
+            bwMeetingMaxAll:      bwMeetingMax      * effectiveCount,
+            bwBackplaneMinAll:    bwBackplaneMin    * effectiveCount,
+            bwBackplaneMaxAll:    bwBackplaneMax    * effectiveCount,
+            bwProxyMinAll:        bwProxyMin        * effectiveCount,
+            bwProxyMaxAll:        bwProxyMax        * effectiveCount,
+            backplaneHdStreams:    hasCrossLocation ? (C.LAYOUTS[tmpl.layout]?.backplane?.hd    ?? 1) : 0,
+            backplaneThumbStreams: hasCrossLocation ? (C.LAYOUTS[tmpl.layout]?.backplane?.thumb ?? 0) : 0,
             nativeCount,
             interopByType,
             interopCount,
@@ -872,9 +882,6 @@
 
       // ── derived meeting totals ────────────────────────────────────────────
       const numberOfMeetings  = computed(() => meetingTemplates.reduce((a, t) => a + effectiveCountForTemplate(t), 0));
-      const totalParticipants = computed(() => meetingResults.value.reduce((a, r) => a + r.totalPts * r.count, 0));
-      const totalExternalPts  = computed(() => meetingResults.value.reduce((a, r) => a + r.extPts * r.count, 0));
-      const totalInternalPts  = computed(() => totalParticipants.value - totalExternalPts.value);
 
       // ── step 3: total HD before backplane ─────────────────────────────────
       const totalHDBeforeBackplane = computed(() =>
@@ -954,12 +961,15 @@
           .map(loc => {
             const ms = meetingResults.value.filter(r => r.hostLocationId === loc.id);
             return {
-              id:       loc.id,
-              name:     loc.name || 'Unnamed',
-              localMin: ms.reduce((a, r) => a + r.bwMeetingMinAll,   0),
-              localMax: ms.reduce((a, r) => a + r.bwMeetingMaxAll,   0),
-              wanMin:   ms.reduce((a, r) => a + r.bwBackplaneMinAll, 0),
-              wanMax:   ms.reduce((a, r) => a + r.bwBackplaneMaxAll, 0),
+              id:            loc.id,
+              name:          loc.name || 'Unnamed',
+              localMin:      ms.reduce((a, r) => a + r.bwMeetingMinAll,   0),
+              localMax:      ms.reduce((a, r) => a + r.bwMeetingMaxAll,   0),
+              wanMin:        ms.reduce((a, r) => a + r.bwBackplaneMinAll, 0),
+              wanMax:        ms.reduce((a, r) => a + r.bwBackplaneMaxAll, 0),
+              proxyMin:      ms.reduce((a, r) => a + r.bwProxyMinAll,     0),
+              proxyMax:      ms.reduce((a, r) => a + r.bwProxyMaxAll,     0),
+              crossMeetings: ms.filter(r => r.hasCrossLocation).length,
             };
           })
           .filter(l => l.localMin > 0 || l.wanMin > 0)
@@ -970,6 +980,14 @@
       const totalBandwidthMax = computed(() =>
         meetingBandwidthMax.value + backplaneBandwidthMax.value + proxyBandwidthMax.value
       );
+
+      // ── QoS traffic-class aggregates ──────────────────────────────────────
+      const bwClassAudioMin = computed(() => meetingResults.value.reduce((a, r) => a + r.bwAudioMinAll,        0));
+      const bwClassAudioMax = computed(() => meetingResults.value.reduce((a, r) => a + r.bwAudioMaxAll,        0));
+      const bwClassVideoMin = computed(() => meetingResults.value.reduce((a, r) => a + r.bwVideoMinAll,        0));
+      const bwClassVideoMax = computed(() => meetingResults.value.reduce((a, r) => a + r.bwVideoMaxAll,        0));
+      const bwClassPresMin  = computed(() => meetingResults.value.reduce((a, r) => a + r.bwPresentationMinAll, 0));
+      const bwClassPresMax  = computed(() => meetingResults.value.reduce((a, r) => a + r.bwPresentationMaxAll, 0));
 
       // ── warnings ──────────────────────────────────────────────────────────
       const warnings = computed(() => {
@@ -1143,9 +1161,6 @@
 
         // computed — meeting totals
         numberOfMeetings,
-        totalParticipants,
-        totalInternalPts,
-        totalExternalPts,
 
         // computed — resource pipeline
         totalHDRaw,
@@ -1165,6 +1180,12 @@
         perLocationBandwidth,
         totalBandwidthMin,
         totalBandwidthMax,
+        bwClassAudioMin,
+        bwClassAudioMax,
+        bwClassVideoMin,
+        bwClassVideoMax,
+        bwClassPresMin,
+        bwClassPresMax,
         warnings,
         nodeRecommendations,
 
