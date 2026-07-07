@@ -35,7 +35,7 @@
       <span class="chip-unit">HD-equivalent</span>
     </div>
     <div class="summary-chip">
-      <span class="chip-label">vCPU Required</span>
+      <span class="chip-label">vCPU Committed</span>
       <span class="chip-value" :style="vCPURequired > totalAvailableVCPU ? 'color:var(--warn-amber)' : ''">{{ vCPURequired }}</span>
       <span class="chip-unit">of {{ totalAvailableVCPU }} available</span>
     </div>
@@ -786,18 +786,24 @@
               <div class="stat-value">{{ fmtHD(totalHDWithHeadroom) }}</div>
               <div class="stat-label">With 25% Headroom</div>
             </div>
-            <div class="stat-box" :class="vCPURequired > totalAvailableVCPU ? 'accent-warn' : 'accent'">
-              <div class="stat-value">{{ vCPURequired }}</div>
-              <div class="stat-label">vCPU Required</div>
+            <div class="stat-box accent">
+              <div class="stat-value">{{ nodeCapacityHD }}</div>
+              <div class="stat-label">HD per Node</div>
             </div>
-            <div class="stat-box" :class="vCPURequired > totalAvailableVCPU ? 'accent-warn' : 'accent'">
-              <div class="stat-value">{{ totalAvailableVCPU }}</div>
-              <div class="stat-label">vCPU Available</div>
+            <div class="stat-box accent">
+              <div class="stat-value">{{ transcodingNodeCount }}</div>
+              <div class="stat-label">Nodes Required</div>
             </div>
           </div>
           <div class="breakdown-row" style="margin-top:8px">
             <span class="bd-label">Conferencing nodes ({{ vCPUPerNode }} vCPU / {{ ramPerNode }} GB each)</span>
             <span class="bd-val">{{ transcodingNodeCount }} node{{ transcodingNodeCount !== 1 ? 's' : '' }}</span>
+          </div>
+          <div class="breakdown-row" v-if="totalAvailableVCPU > 0" style="margin-top:4px">
+            <span class="bd-label">vCPU committed / available</span>
+            <span class="bd-val" :style="vCPURequired > totalAvailableVCPU ? 'color:var(--warn-amber)' : ''">
+              {{ vCPURequired }} / {{ totalAvailableVCPU }}
+            </span>
           </div>
 
           <!-- Hardware capacity vs required (only when servers are defined) -->
