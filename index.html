@@ -618,14 +618,24 @@
                   </div>
                   <div class="field-group">
                     <label class="field-label">Max memory channels / socket</label>
-                    <input type="number" v-model.number="server.maxMemoryChannelsPerSocket" min="1" max="16" placeholder="optional" />
+                    <select v-model="server.maxMemoryChannelsPerSocket">
+                      <option :value="4">4</option>
+                      <option :value="6">6</option>
+                      <option :value="8">8</option>
+                      <option :value="12">12</option>
+                    </select>
                   </div>
                 </div>
                 <div class="field-row">
                   <div class="field-group"></div>
                   <div class="field-group">
                     <label class="field-label">Populated channels / socket</label>
-                    <input type="number" v-model.number="server.populatedMemoryChannelsPerSocket" min="1" max="16" placeholder="optional" />
+                    <select v-model="server.populatedMemoryChannelsPerSocket">
+                      <option :value="4">4</option>
+                      <option :value="6">6</option>
+                      <option :value="8">8</option>
+                      <option :value="12">12</option>
+                    </select>
                   </div>
                 </div>
 
