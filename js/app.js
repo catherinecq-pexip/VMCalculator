@@ -457,7 +457,7 @@
           baseClockGhz:         3.0,
           hyperthreading:       false,
           cpuCacheMB:           36,
-          instructionSet:       'unknown',
+          instructionSet:       'avx2',
           totalRAM:             64,
           maxMemoryChannelsPerSocket:    8,
           populatedMemoryChannelsPerSocket: 8,
