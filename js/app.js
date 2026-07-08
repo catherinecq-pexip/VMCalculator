@@ -358,8 +358,8 @@
           ? popCh / maxCh : null;
 
         let instructionSetScore = 0;
-        if      (server.instructionSet === 'avx512') instructionSetScore = 0.04;
-        else if (server.instructionSet === 'avx2')   instructionSetScore = 0.02;
+        if (server.instructionSet === 'avx512' || server.instructionSet === 'avx2')
+          instructionSetScore = 0.02;
 
         let baseClockScore = 0;
         if      (server.baseClockGhz < 2.3) baseClockScore = -0.05;
@@ -367,17 +367,11 @@
         else if (server.baseClockGhz < 2.9) baseClockScore =  0.02;
         else                                 baseClockScore =  0.04;
 
-        let cacheScore = 0;
-        if      (cachePerThread < 0.50) cacheScore = -0.02;
-        else if (cachePerThread < 0.75) cacheScore =  0.00;
-        else if (cachePerThread < 1.25) cacheScore =  0.02;
-        else                             cacheScore =  0.04;
-
         let memChannelWidthScore = 0;
         if (maxCh != null) {
-          if      (maxCh >= 8)  memChannelWidthScore =  0.03;
-          else if (maxCh === 6) memChannelWidthScore = -0.06;
-          else if (maxCh <= 4)  memChannelWidthScore = -0.08;
+          if      (maxCh >= 8)  memChannelWidthScore =  0.07;
+          else if (maxCh === 6) memChannelWidthScore = -0.02;
+          else if (maxCh <= 4)  memChannelWidthScore = -0.05;
         }
 
         let memChannelPopScore = 0;
@@ -387,12 +381,24 @@
           else                               memChannelPopScore = -0.08;
         }
 
+        let totalCacheProxyScore = 0;
+        if      (cpuCacheMB >= 64) totalCacheProxyScore = 0.03;
+        else if (cpuCacheMB >= 32) totalCacheProxyScore = 0.02;
+        else if (cpuCacheMB >= 20) totalCacheProxyScore = 0.01;
+
+        let coreDensityProxyScore = 0;
+        const coresPerSocket = server.physicalCoresPerSocket ?? 0;
+        if      (coresPerSocket >= 40) coreDensityProxyScore = 0.02;
+        else if (coresPerSocket >= 32) coreDensityProxyScore = 0.01;
+
         let nodeSizeScore = 0;
         if      (vCPU > 56)  nodeSizeScore = -0.06;
         else if (vCPU >= 49) nodeSizeScore = -0.02;
 
-        const rawK = C.BASE_COEFF + instructionSetScore + baseClockScore + cacheScore
-          + memChannelWidthScore + memChannelPopScore + nodeSizeScore;
+        const rawK = C.BASE_COEFF + instructionSetScore + baseClockScore
+          + memChannelWidthScore + memChannelPopScore
+          + totalCacheProxyScore + coreDensityProxyScore
+          + nodeSizeScore;
 
         // Projected eligibility — all conditions must hold to unlock higher ceiling
         const projectedEligible = (
@@ -400,7 +406,6 @@
           maxCh != null && popCh != null &&
           maxCh >= 8 &&
           Number(popCh) === Number(maxCh) &&
-          cachePerThread >= 1.25 &&
           server.baseClockGhz >= 2.6 &&
           vCPU >= 4 && vCPU <= 56 &&
           (node?.ram ?? 0) >= vCPU
@@ -422,9 +427,10 @@
           memChannelRatio,
           instructionSetScore,
           baseClockScore,
-          cacheScore,
           memChannelWidthScore,
           memChannelPopScore,
+          totalCacheProxyScore,
+          coreDensityProxyScore,
           nodeSizeScore,
           memChannelsMissing:    maxCh == null || popCh == null,
           instructionSetUnknown: !server.instructionSet || server.instructionSet === 'unknown' || server.instructionSet === 'avx',

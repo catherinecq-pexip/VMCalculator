@@ -47,7 +47,7 @@ The calculation model is grounded in Pexip's published capacity planning methodo
 - **NUMA alignment** — Pexip performance is sensitive to NUMA topology. A node VM should not span NUMA nodes. The calculator warns when `nodesPerSocket > 2`.
 - **No CPU overcommit** — Pexip is CPU-intensive real-time media software. Maintain a 1:1 vCPU-to-physical-core ratio; the calculator warns when vCPU allocation exceeds available physical threads per server.
 - **25% headroom** — All resource totals are multiplied by 1.25 before converting to node counts. This provides capacity for bursts and rolling upgrades.
-- **K coefficient model for raw HD capacity** — The hardware builder estimates raw HD compute capacity using a coefficient K derived automatically from CPU and memory-channel traits. K is computed as `clamp(floor, ceiling, BASE_COEFF + scores)` where scores capture instruction set support (AVX-512 +0.04, AVX2 +0.02), base clock (−0.05 to +0.04), CPU cache per assigned vCPU (−0.02 to +0.04), memory-channel width and population, and node size. Two estimate modes are inferred automatically: **Conservative** (ceiling 0.78, default) and **Projected** (ceiling 0.83, +0.04 adjustment) — Projected mode unlocks only when AVX-512 is confirmed, all memory channels are populated, cache-per-vCPU ≥ 1.25 MB, base clock ≥ 2.6 GHz, node vCPU ≤ 56, and RAM ≥ vCPU. The result is an estimated raw HD compute bucket (`floor(vCPU × GHz × K)` per node), not usable participant capacity.
+- **K coefficient model for raw HD capacity** — The hardware builder estimates raw HD compute capacity using a coefficient K derived automatically from CPU and memory-channel traits. K is computed as `clamp(floor, ceiling, BASE_COEFF + scores)` where scores capture instruction set support (AVX-512 or AVX2 +0.02, AVX/Basic +0.00), base clock (−0.05 to +0.04), memory-channel width (≤4→−0.05, 6→−0.02, ≥8→+0.07) and population, total CPU cache (20–31 MB→+0.01, 32–63→+0.02, ≥64→+0.03), physical core density per socket (32–39→+0.01, ≥40→+0.02), and node size. Two estimate modes are inferred automatically: **Conservative** (ceiling 0.79, default) and **Projected** (ceiling 0.83, +0.04 adjustment) — Projected mode unlocks only when AVX-512 is confirmed, all 8+ memory channels are populated, base clock ≥ 2.6 GHz, node vCPU ≤ 56, and RAM ≥ vCPU. The result is an estimated raw HD compute bucket (`floor(vCPU × GHz × K)` per node), not usable participant capacity.
 
 ---
 
@@ -393,19 +393,20 @@ Estimates raw HD compute capacity per transcoding node from server and node hard
 
 | Score | Input | Values |
 |---|---|---|
-| InstructionSetScore | `server.instructionSet` | AVX-512 → +0.04 · AVX2 → +0.02 · AVX/Unknown → +0.00 |
+| InstructionSetScore | `server.instructionSet` | AVX-512 or AVX2 → +0.02 · AVX / Basic → +0.00 |
 | BaseClockScore | `server.baseClockGhz` | < 2.3 → −0.05 · 2.3–2.6 → −0.02 · 2.6–2.9 → +0.02 · ≥ 2.9 → +0.04 |
-| CacheScore | `cpuCacheMB / node.vCPU` | < 0.50 → −0.02 · 0.50–0.75 → +0.00 · 0.75–1.25 → +0.02 · ≥ 1.25 → +0.04 |
-| MemoryChannelWidthScore | `maxMemoryChannelsPerSocket` | ≥ 8 → +0.03 · = 6 → −0.06 · ≤ 4 → −0.08 · missing → +0.00 |
+| MemoryChannelWidthScore | `maxMemoryChannelsPerSocket` | ≥ 8 → +0.07 · = 6 → −0.02 · ≤ 4 → −0.05 · missing → +0.00 |
 | MemoryChannelPopulationScore | `populatedChannels / maxChannels` | = 1.00 → +0.00 · ≥ 0.75 → −0.03 · < 0.75 → −0.08 · missing → +0.00 |
+| TotalCacheProxyScore | `server.cpuCacheMB` (total) | ≥ 64 MB → +0.03 · 32–63 MB → +0.02 · 20–31 MB → +0.01 · < 20 MB → +0.00 |
+| CoreDensityProxyScore | `server.physicalCoresPerSocket` | ≥ 40 → +0.02 · 32–39 → +0.01 · < 32 → +0.00 |
 | NodeSizeScore | `node.vCPU` | ≤ 48 → +0.00 · 49–56 → −0.02 · > 56 → −0.06 |
 
 **Constants:**
 
 ```
-COEFF_FLOOR                = 0.58
-BASE_COEFF                 = 0.62
-COEFF_CEILING_CONSERVATIVE = 0.78
+COEFF_FLOOR                = 0.60
+BASE_COEFF                 = 0.595
+COEFF_CEILING_CONSERVATIVE = 0.79
 COEFF_CEILING_PROJECTED    = 0.83
 PROJECTED_MODE_ADJUSTMENT  = 0.04
 ```
@@ -415,7 +416,6 @@ PROJECTED_MODE_ADJUSTMENT  = 0.04
 `ProjectedEligibility` is true only when **all** of the following hold:
 - `instructionSet === 'avx512'`
 - `maxMemoryChannelsPerSocket >= 8` and `populatedChannels === maxChannels`
-- `cachePerThread >= 1.25 MB` (where `cachePerThread = cpuCacheMB / node.vCPU`)
 - `baseClockGhz >= 2.6`
 - `4 <= node.vCPU <= 56`
 - `node.ram >= node.vCPU`
@@ -427,8 +427,10 @@ if ProjectedEligible:
 else:
   K = clamp(COEFF_FLOOR, COEFF_CEILING_CONSERVATIVE, RawK)
 
-RawK = BASE_COEFF + InstructionSetScore + BaseClockScore + CacheScore
-       + MemoryChannelWidthScore + MemoryChannelPopulationScore + NodeSizeScore
+RawK = BASE_COEFF + InstructionSetScore + BaseClockScore
+       + MemoryChannelWidthScore + MemoryChannelPopulationScore
+       + TotalCacheProxyScore + CoreDensityProxyScore
+       + NodeSizeScore
 ```
 
 **Node HD capacity formula:**
@@ -439,27 +441,33 @@ TotalRawHD = sum(NodeRawHD × server.quantity  for all transcoding nodes across 
 
 `TotalRawHD` is wired through `serverAllocations → physicalCapacitySummary → totalRawHDCapacity` and displayed in the hardware allocation summary strip and Resource Summary result card.
 
-**Example — Conservative mode** (Unknown ISA, 36 MB cache, 3.0 GHz, 48-vCPU node, 8/8 channels):
+**Example — Conservative mode** (AVX2, 48 MB cache, 3.0 GHz, 32-vCPU node, 24 cores/socket, 8/8 channels):
 ```
-CachePerThread       = 36 / 48 = 0.75 MB  → CacheScore = +0.02
-BaseClockScore       = +0.02  (2.6 ≤ 3.0 < 2.9)
-MemChannelWidthScore = +0.03  (maxCh = 8)
-InstructionSetScore  = +0.00  (unknown)
-RawK = 0.62 + 0.00 + 0.02 + 0.02 + 0.03 + 0.00 + 0.00 = 0.69
-Mode = Conservative (ISA unknown) → K = clamp(0.58, 0.78, 0.69) = 0.69
-NodeRawHD = floor(48 × 3.0 × 0.69) = 99 HD
+InstructionSetScore    = +0.02  (AVX2)
+BaseClockScore         = +0.02  (2.6 ≤ 3.0 < 2.9)
+MemChannelWidthScore   = +0.07  (maxCh = 8)
+MemChannelPopScore     =  0.00  (ratio = 1.0)
+TotalCacheProxyScore   = +0.02  (48 MB, 32–63)
+CoreDensityProxyScore  =  0.00  (24 cores/socket, <32)
+NodeSizeScore          =  0.00  (vCPU = 32)
+RawK = 0.595 + 0.02 + 0.02 + 0.07 + 0.00 + 0.02 + 0.00 + 0.00 = 0.725
+Mode = Conservative → K = clamp(0.60, 0.79, 0.725) = 0.725
+NodeRawHD = floor(32 × 3.0 × 0.725) = 69 HD
 ```
 
-**Example — Projected mode** (AVX-512, 60 MB cache, 3.0 GHz, 32-vCPU node, 8/8 channels, 64 GB RAM):
+**Example — Projected mode** (AVX-512, 60 MB cache, 3.0 GHz, 32-vCPU node, 40 cores/socket, 8/8 channels, 64 GB RAM):
 ```
-CachePerThread       = 60 / 32 = 1.875 MB → CacheScore = +0.04
-InstructionSetScore  = +0.04  (AVX-512)
-BaseClockScore       = +0.02  (2.6 ≤ 3.0 < 2.9)
-MemChannelWidthScore = +0.03
-RawK = 0.62 + 0.04 + 0.02 + 0.04 + 0.03 + 0.00 + 0.00 = 0.75
+InstructionSetScore    = +0.02  (AVX-512)
+BaseClockScore         = +0.02  (2.6 ≤ 3.0 < 2.9)
+MemChannelWidthScore   = +0.07  (maxCh = 8)
+MemChannelPopScore     =  0.00  (ratio = 1.0)
+TotalCacheProxyScore   = +0.02  (60 MB, 32–63)
+CoreDensityProxyScore  = +0.02  (40 cores/socket)
+NodeSizeScore          =  0.00  (vCPU = 32)
+RawK = 0.595 + 0.02 + 0.02 + 0.07 + 0.00 + 0.02 + 0.02 + 0.00 = 0.745
 All ProjectedEligibility conditions met → mode = Projected
-K = clamp(0.58, 0.83, 0.75 + 0.04) = 0.79
-NodeRawHD = floor(32 × 3.0 × 0.79) = 75 HD
+K = clamp(0.60, 0.83, 0.745 + 0.04) = 0.785
+NodeRawHD = floor(32 × 3.0 × 0.785) = 75 HD
 ```
 
 ---
