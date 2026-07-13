@@ -605,6 +605,7 @@
                       <option value="avx512">AVX-512</option>
                       <option value="avx2">AVX2</option>
                       <option value="avx">AVX / Basic</option>
+                      <option value="unknown">Unknown</option>
                     </select>
                   </div>
                 </div>
@@ -1133,17 +1134,10 @@
               </span>
             </div>
             <div class="efficiency-row" style="font-size:11px">
-              <span class="efficiency-label">Total cache score</span>
+              <span class="efficiency-label">Cache score</span>
               <span class="efficiency-val"
-                    :style="hdEstimateResult.totalCacheProxyScore > 0 ? 'color:var(--pex-teal-dark)' : 'color:var(--pex-text-muted)'">
-                +{{ hdEstimateResult.totalCacheProxyScore.toFixed(2) }}
-              </span>
-            </div>
-            <div class="efficiency-row" style="font-size:11px">
-              <span class="efficiency-label">Core density score</span>
-              <span class="efficiency-val"
-                    :style="hdEstimateResult.coreDensityProxyScore > 0 ? 'color:var(--pex-teal-dark)' : 'color:var(--pex-text-muted)'">
-                +{{ hdEstimateResult.coreDensityProxyScore.toFixed(2) }}
+                    :style="hdEstimateResult.cacheScore < 0 ? 'color:var(--warn-amber)' : hdEstimateResult.cacheScore > 0 ? 'color:var(--pex-teal-dark)' : 'color:var(--pex-text-muted)'">
+                {{ hdEstimateResult.cacheScore >= 0 ? '+' : '' }}{{ hdEstimateResult.cacheScore.toFixed(2) }}
               </span>
             </div>
             <div class="efficiency-row" style="font-size:11px">

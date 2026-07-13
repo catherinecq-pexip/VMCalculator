@@ -149,11 +149,11 @@ window.PEXIP = {
   CORES_PER_NODE_TARGET: 22, // physical cores per conferencing node target
 
   // K coefficient model constants
-  COEFF_FLOOR:                0.60,
-  COEFF_CEILING_CONSERVATIVE: 0.79,
+  COEFF_FLOOR:                0.58,
+  COEFF_CEILING_CONSERVATIVE: 0.78,
   COEFF_CEILING_PROJECTED:    0.83,
   PROJECTED_MODE_ADJUSTMENT:  0.04,
-  BASE_COEFF:                 0.595,
+  BASE_COEFF:                 0.62,
 
   // Supported transcoding node vCPU sizes
   NODE_SIZES: [16, 24, 32, 48],
